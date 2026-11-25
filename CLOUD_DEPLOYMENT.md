@@ -1,5 +1,21 @@
 # 月映公网内测部署
 
+## 当前无卡部署方案
+
+- Web 使用 [月映 GitHub Pages](https://rain-ziyu.github.io/yueying/)，从 gh-pages 分支根目录发布。在 web 下运行 npm ci 与 npm run build，把 dist 内容发布到该分支。上线后设置 VITE_API_URL 为实际 Go 服务域名并重新构建。
+- 在 [Railway](https://railway.com/dashboard) 的同一项目内创建 Go 服务、PostgreSQL 和私有 Storage Bucket。Go 服务连接本仓库 master 分支，Root Directory 选 /server；构建与健康检查见 server/railway.toml。
+- DATABASE_URL 引用 PostgreSQL 服务的私网连接串。DEFAULT_STORE 与 LEGACY_STORE 设为 railway-v1。ALLOWED_ORIGINS 包含 https://rain-ziyu.github.io。为 Go 服务生成 Railway 提供的 HTTPS 域名。
+- STORES_JSON 使用以下结构，把值替换为桶 Credentials 页给出的对应字段。endpoint 仅填主机名。桶 CORS 允许上述前端来源对对象执行 PUT、GET、HEAD，并允许上传、Range 读取所需请求头。密钥仅存入 Go 服务的环境变量。
+
+~~~json
+{"railway-v1":{"provider":"s3","virtualHost":true,"endpoint":"BUCKET_ENDPOINT_HOST","region":"BUCKET_REGION","bucket":"BUCKET_NAME","accessKey":"ACCESS_KEY","secretKey":"SECRET_KEY"}}
+~~~
+
+Railway Free 每月包含 1 美元资源用量，额度耗尽会暂停到下一周期。空闲服务可能休眠，数据库、运行时间等会消耗额度。请用两条大陆网络实测邀请页、WebSocket 和大文件拖动。私有桶的直接签名下载免桶出站流量费。参阅 [Railway Free](https://docs.railway.com/pricing/free-plan) 和 [视频直传直读](https://docs.railway.com/storage-buckets/uploading-serving)。
+
+## 原 Vercel / Render 方案
+
+
 | 模块 | 服务与入口 | 用途 |
 | --- | --- | --- |
 | Web | [Vercel 项目导入](https://vercel.com/new) | 发布 Vue 页面和房间邀请链接 |

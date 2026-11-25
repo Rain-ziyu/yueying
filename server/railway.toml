@@ -1,0 +1,7 @@
+[build]
+builder = "RAILPACK"
+buildCommand = "go build -trimpath -o yueying ."
+
+[deploy]
+startCommand = "./yueying"
+healthcheckPath = "/health"
