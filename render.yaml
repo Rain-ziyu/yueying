@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: yueying-api
+    runtime: go
+    plan: free
+    region: singapore
+    branch: master
+    rootDir: server
+    buildCommand: go build -trimpath -o yueying .
+    startCommand: ./yueying
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: STORES_JSON
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: DEFAULT_STORE
+        value: r2-v1
+      - key: LEGACY_STORE
+        value: r2-v1
