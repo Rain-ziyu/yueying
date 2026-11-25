@@ -1,0 +1,195 @@
+* {
+  box-sizing: border-box;
+}
+body {
+  background: #11161d;
+  color: #f6f3ee;
+  font:
+    16px/1.5 "Segoe UI",
+    system-ui,
+    sans-serif;
+}
+header,
+nav,
+.controls,
+.chat {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+header {
+  height: 68px;
+  padding: 0 5vw;
+  border-bottom: 1px solid #354047;
+}
+header strong {
+  font-size: 25px;
+  letter-spacing: 0.14em;
+}
+header span,
+small {
+  color: #a8b9bd;
+}
+header button {
+  margin-left: auto;
+}
+h1 {
+  font-size: clamp(26px, 4vw, 44px);
+  line-height: 1.18;
+}
+h2 {
+  font-size: 19px;
+  margin-top: 0;
+}
+button,
+select,
+input,
+.pick {
+  font: inherit;
+  border: 1px solid #45525b;
+  border-radius: 8px;
+  background: #242e36;
+  color: inherit;
+  padding: 8px 12px;
+}
+button,
+.pick {
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.5;
+}
+.entry {
+  max-width: 440px;
+  margin: 10vh auto;
+  padding: 24px;
+}
+.entry label {
+  display: grid;
+  gap: 6px;
+  margin: 18px 0;
+}
+.primary,
+.pick {
+  background: #addfc6;
+  color: #102a22;
+}
+.primary {
+  width: 100%;
+}
+article {
+  max-width: 1480px;
+  padding: 1em 5vw;
+  margin: auto;
+}
+nav {
+  flex-wrap: wrap;
+}
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 24%);
+  gap: 22px;
+}
+.stage {
+  position: relative;
+  aspect-ratio: 16/9;
+  background: #06090b;
+  overflow: hidden;
+  border-radius: 12px;
+}
+.stage p {
+  position: absolute;
+  inset: 40% 0;
+  text-align: center;
+  color: #a8b9bd;
+  pointer-events: none;
+}
+video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.stage.wide {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  aspect-ratio: auto;
+}
+.stage.wide button {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+}
+.bullet {
+  position: absolute;
+  white-space: nowrap;
+  left: 100%;
+  font-weight: bold;
+  text-shadow: 0 1px 4px #000;
+  pointer-events: none;
+  animation: fly 7.5s linear forwards;
+}
+.stage {
+  container-type: inline-size;
+}
+@keyframes fly {
+  to {
+    transform: translateX(calc(-100cqw - 100%));
+  }
+}
+.controls,
+.chat {
+  padding: 10px 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.controls input,
+.chat input {
+  flex: 1;
+  min-width: 70px;
+}
+.pick,
+.item {
+  display: block;
+  margin: 10px 0;
+}
+.pick input {
+  display: none;
+}
+.item {
+  width: 100%;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+aside {
+  background: #1a2229;
+  padding: 18px;
+  border-radius: 12px;
+  align-self: start;
+}
+.error {
+  margin: 1em auto;
+  max-width: 700px;
+  background: #522e32;
+  padding: 12px;
+}
+@media (max-width: 760px) {
+  .layout {
+    display: block;
+  }
+  .controls button,
+  .controls select {
+    font-size: 13px;
+    padding: 6px;
+  }
+  aside {
+    margin: 14px 0;
+  }
+  nav h1 {
+    width: 100%;
+    margin-bottom: 0;
+  }
+  nav {
+    margin-bottom: 12px;
+  }
+}

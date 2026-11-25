@@ -1,0 +1,30 @@
+{
+  "productName": "Yueying",
+  "version": "0.1.0",
+  "identifier": "app.yueying.watch",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "月映",
+        "width": 1100,
+        "height": 740,
+        "minWidth": 480,
+        "minHeight": 450
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.icns",
+      "icons/icon.png"
+    ]
+  }
+}

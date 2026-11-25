@@ -1,0 +1,30 @@
+{
+  "name": "yueying",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "android": "npm run build && cap sync android",
+    "ios": "npm run build && cap sync ios",
+    "desktop": "tauri build",
+    "harmony": "npm run build && node scripts/harmony.mjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "7.4.3",
+    "@capacitor/core": "7.4.3",
+    "@capacitor/ios": "7.4.3",
+    "vue": "3.5.22"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "7.4.3",
+    "@tauri-apps/cli": "2.9.4",
+    "@vitejs/plugin-vue": "6.0.1",
+    "prettier": "^3.6.2",
+    "typescript": "5.9.3",
+    "vite": "7.1.12",
+    "vite-plugin-singlefile": "^2.3.0",
+    "vue-tsc": "^3.1.3"
+  }
+}
