@@ -80,14 +80,47 @@ function connect() {
   if (!member.value) return;
   const ws = new WebSocket(endpoint.replace(/^http/, "ws") + "/api/v1/live");
   socket = ws;
+  let synced = false;
+  let bestRtt = Infinity;
+  let pingAt = 0;
+  let samples = 0;
+  let clockTimer = 0;
+  function ping() {
+    if (socket !== ws || ws.readyState !== WebSocket.OPEN) return;
+    pingAt = performance.now();
+    ws.send(JSON.stringify({ type: "ping" }));
+  }
   ws.onopen = () => {
     ws.send(JSON.stringify({ token: member.value?.token }));
   };
   ws.onmessage = async (event) => {
+    if (socket !== ws) return;
     const m = JSON.parse(event.data);
+    if (m.type === "pong" && pingAt) {
+      const received = performance.now();
+      const rtt = received - pingAt;
+      if (rtt < bestRtt) {
+        bestRtt = rtt;
+        offset = m.now - (performance.timeOrigin + pingAt + rtt / 2);
+      }
+      pingAt = 0;
+      samples++;
+      if (samples % 3 === 0) {
+        clockTimer = window.setTimeout(() => {
+          bestRtt = Infinity;
+          ping();
+        }, 60000);
+      } else {
+        clockTimer = window.setTimeout(ping, 250);
+      }
+    }
     if (m.type === "state") {
       connected.value = true;
-      offset = m.now - Date.now();
+      if (!synced) {
+        offset = m.now - (performance.timeOrigin + performance.now());
+        synced = true;
+        ping();
+      }
       state.value = m.state;
       await align().catch(fail);
     }
@@ -101,6 +134,7 @@ function connect() {
     }
   };
   ws.onclose = () => {
+    clearTimeout(clockTimer);
     if (socket !== ws) return;
     connected.value = false;
     retry = window.setTimeout(connect, 1800);
@@ -110,7 +144,9 @@ function target() {
   const s = state.value;
   return (
     s.position +
-    (s.playing ? (Math.max(0, Date.now() + offset - s.at) / 1000) * s.rate : 0)
+    (s.playing
+      ? (Math.max(0, performance.timeOrigin + performance.now() + offset - s.at) / 1000) * s.rate
+      : 0)
   );
 }
 async function source(id: string) {
@@ -143,7 +179,7 @@ async function align() {
     target(),
     Number.isFinite(v.duration) ? v.duration : Infinity,
   );
-  if (Math.abs(v.currentTime - t) > 0.45) v.currentTime = t;
+  if (Math.abs(v.currentTime - t) > (s.playing ? 0.45 : 0.08)) v.currentTime = t;
   v.playbackRate = s.rate;
   if (s.playing && v.paused && !v.ended) {
     try {
@@ -298,6 +334,7 @@ onUnmounted(() => {
             ref="video"
             playsinline
             @click="toggle"
+            @playing="align().catch(fail)"
             @loadedmetadata="
               duration = video?.duration || 0;
               align().catch(fail);
