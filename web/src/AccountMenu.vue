@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from "vue";
 import ProfileEditor from "./ProfileEditor.vue";
+import { Check, Copy } from "@lucide/vue";
 import {
   providerName,
   refreshProfile,
@@ -48,6 +49,14 @@ watch(
 function profileSaved() {
   editing.value = false;
   notice.value = { kind: "success", text: "个人资料已保存" };
+}
+async function copyAccountId(id: string) {
+  try {
+    await navigator.clipboard.writeText(id);
+    notice.value = { kind: "success", text: "账号 ID 已复制" };
+  } catch {
+    notice.value = { kind: "error", text: "复制失败，可选中账号 ID 手动复制" };
+  }
 }
 watch(
   () => session.value?.avatarUrl,
@@ -155,7 +164,25 @@ onMounted(() => {
         </div>
         <dl>
           <dt>月映账号 ID</dt>
-          <dd>{{ session.id }}</dd>
+          <dd>
+            <span class="account-id-value" :title="session.id">{{
+              session.id
+            }}</span>
+            <button
+              class="profile-action"
+              type="button"
+              aria-label="复制完整账号 ID"
+              @click="copyAccountId(session.id)"
+            >
+              <Check
+                v-if="notice?.text === '账号 ID 已复制'"
+                :size="14"
+                aria-hidden="true"
+              />
+              <Copy v-else :size="14" aria-hidden="true" />
+              {{ notice?.text === "账号 ID 已复制" ? "已复制" : "复制" }}
+            </button>
+          </dd>
         </dl>
         <button
           type="button"

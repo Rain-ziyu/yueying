@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { ImagePlus, RotateCcw } from "@lucide/vue";
 import { saveProfile } from "./account";
 
 const props = defineProps<{
@@ -14,7 +15,10 @@ const name = ref(originalName),
 const preview = computed(() => avatar.value ?? props.account.avatarUrl);
 const brokenPreview = ref("");
 const changed = computed(
-  () => name.value.trim() !== originalName || avatar.value !== undefined,
+  () =>
+    name.value.trim() !== originalName ||
+    (avatar.value !== undefined &&
+      avatar.value !== (props.account.avatarUrl || "")),
 );
 function setBusy(value: boolean) {
   processing.value = value;
@@ -88,31 +92,42 @@ async function save() {
 </script>
 <template>
   <form class="profile-editor" @submit.prevent="save">
-    <span class="profile-avatar large" aria-label="头像预览">
-      <img
-        v-if="preview && brokenPreview !== preview"
-        :src="preview"
-        alt="头像预览"
-        referrerpolicy="no-referrer"
-        @error="brokenPreview = preview"
-      />
-      <template v-else>{{ Array.from(name.trim())[0] }}</template>
-    </span>
-    <label
-      >更换头像<input
-        :disabled="processing"
-        type="file"
-        accept="image/jpeg,image/png,image/webp"
-        @change="choose"
-    /></label>
-    <button
-      v-if="preview"
-      type="button"
-      :disabled="processing"
-      @click="avatar = ''"
-    >
-      移除头像
-    </button>
+    <div class="avatar-editor-row">
+      <span class="profile-avatar large" aria-label="头像预览">
+        <img
+          v-if="preview && brokenPreview !== preview"
+          :src="preview"
+          alt="头像预览"
+          referrerpolicy="no-referrer"
+          @error="brokenPreview = preview"
+        />
+        <template v-else>{{ Array.from(name.trim())[0] }}</template>
+      </span>
+      <div class="avatar-controls">
+        <label class="profile-action avatar-picker">
+          <ImagePlus :size="15" aria-hidden="true" />选择图片
+          <input
+            aria-label="选择头像图片"
+            :disabled="processing"
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            @change="choose"
+          />
+        </label>
+        <button
+          class="profile-action"
+          type="button"
+          :disabled="processing || !preview"
+          title="恢复昵称首字头像"
+          @click="
+            avatar = '';
+            error = '';
+          "
+        >
+          <RotateCcw :size="15" aria-hidden="true" />重置头像
+        </button>
+      </div>
+    </div>
     <label
       >月映昵称<input
         v-model="name"

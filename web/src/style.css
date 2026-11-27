@@ -1206,20 +1206,35 @@ progress::-moz-progress-bar {
 .profile-avatar.large { width: 52px; height: 52px; font-size: 22px; }
 .profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .profile-editor { margin: 14px 0 0; }
-.profile-editor input[type=file] { font-size: 12px; }
-.profile-editor input[type=file]::file-selector-button {
-  border: 0;
-  border-radius: 4px;
-  padding: 5px 8px;
-  margin-right: 8px;
-  background: #edf3ee;
-  color: #305342;
+.avatar-editor-row, .avatar-controls { display: flex; align-items: center; gap: 6px; }
+.avatar-editor-row { gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.account-panel .profile-action, .account-panel label.avatar-picker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
 }
+.account-panel label.avatar-picker { position: relative; overflow: hidden; background: #edf3ee; color: var(--green); }
+.avatar-picker input[type=file] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.avatar-picker:focus-within, .profile-action:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.account-panel .profile-action:not(:disabled):hover { border-color: var(--green); }
 .profile-card { flex-wrap: wrap; overflow-wrap: anywhere; margin: 16px 0 10px; }
 .profile-card > div { flex: 1; min-width: 0; }
-.profile-card dl { width: 100%; padding: 12px 0; margin: 0; border-block: 1px solid var(--line); }
-.profile-card dt { font-size: 12px; color: var(--muted); }
-.profile-card dd { margin: 4px 0 0; font: 13px/1.5 monospace; }
+.profile-card dl, .profile-card dd { display: grid; align-items: center; gap: 8px; min-width: 0; }
+.profile-card dl { grid-template-columns: auto minmax(0, 1fr); width: 100%; padding: 8px 0; margin: 0; border-block: 1px solid var(--line); }
+.profile-card dt { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.profile-card dd { grid-template-columns: minmax(0, 1fr) auto; margin: 0; }
+.account-id-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; font: 13px/1.5 monospace; }
 .account-panel p.account-notice {
   margin: 10px 0;
   padding: 10px 12px;
