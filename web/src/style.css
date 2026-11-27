@@ -885,6 +885,22 @@ progress::-moz-progress-bar {
   border: 1px solid #ffffff52;
   border-radius: 50%;
 }
+.center-toggle {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  pointer-events: auto;
+}
+.center-toggle:enabled:hover span, .center-toggle:focus-visible span {
+  border-color: white;
+  background: #101510ef;
+}
+.center-toggle:disabled { cursor: default; }
 .play-feedback svg {
   width: 42%;
   height: 42%;

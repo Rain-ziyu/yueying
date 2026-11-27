@@ -177,15 +177,37 @@ function memberProgress(person: Participant) {
   );
 }
 const pendingToggle = ref<boolean | null>(null);
-const feedback = computed(() => {
+const togglePauses = computed(
+  () =>
+    !blocked.value && (state.value.playing || pendingNames.value.length > 0),
+);
+const canToggle = computed(
+  () =>
+    connected.value &&
+    !!state.value.asset &&
+    pendingToggle.value === null &&
+    ((state.value.playing && blocked.value) ||
+      can(togglePauses.value ? "pause" : "play")),
+);
+const toggleLabel = computed(() => {
+  if (!connected.value) return "正在重连，暂时无法控制播放";
   if (pendingToggle.value !== null)
-    return pendingToggle.value ? "正在播放…" : "正在暂停…";
+    return pendingToggle.value ? "正在请求播放…" : "正在请求暂停…";
+  if (!canToggle.value)
+    return togglePauses.value ? "暂停需房主授权" : "播放需房主授权";
+  if (pendingNames.value.length) return "取消等待并暂停";
+  return togglePauses.value ? "暂停播放" : "继续播放";
+});
+const feedback = computed(() => {
+  if (!connected.value || pendingToggle.value !== null)
+    return toggleLabel.value;
   if (pendingNames.value.length)
     return "等待缓冲 · " + pendingNames.value.join("、");
-  if (!state.value.playing) return "已暂停";
+  if (!state.value.playing)
+    return canToggle.value ? "已暂停 · 继续播放" : toggleLabel.value;
   if (blocked.value) return "点按播放";
   if (waiting.value) return "缓冲中";
-  return showPlay.value ? "播放中" : "";
+  return showPlay.value || controlsVisible.value ? toggleLabel.value : "";
 });
 function resetCommand() {
   clearTimeout(commandTimer);
@@ -340,7 +362,7 @@ function connect() {
   let probe = 0,
     pingAt = 0,
     clockTimer = 0,
-    watchdog = 0;
+    watchdog = window.setTimeout(() => ws.close(), 25000);
   function ping() {
     if (socket !== ws || ws.readyState !== WebSocket.OPEN) return;
     pingAt = performance.now();
@@ -408,6 +430,7 @@ function connect() {
       connected.value = true;
       const first = !synced;
       if (first) {
+        clearTimeout(watchdog);
         offset = m.now - (performance.timeOrigin + performance.now());
         synced = true;
         ping();
@@ -645,8 +668,7 @@ function clickPicture(event: MouseEvent) {
   if (!firstTap) toggle();
 }
 function toggle() {
-  if (!connected.value || !state.value.asset || pendingToggle.value !== null)
-    return;
+  if (!canToggle.value) return;
   if (state.value.playing && blocked.value && video.value) {
     blocked.value = false;
     startPlayback(video.value);
@@ -956,15 +978,22 @@ onUnmounted(() => {
               class="play-feedback"
               aria-live="polite"
             >
-              <span
-                ><Pause
-                  v-if="
-                    pendingToggle === false ||
-                    (pendingToggle === null && !state.playing)
-                  " /><RefreshCw
-                  v-else-if="waiting && pendingToggle === null" /><Play
-                  v-else /></span
-              ><b>{{ feedback }}</b>
+              <button
+                type="button"
+                class="center-toggle"
+                :disabled="!canToggle"
+                :aria-label="toggleLabel"
+                @click="
+                  revealControls();
+                  toggle();
+                "
+              >
+                <span aria-hidden="true">
+                  <RefreshCw v-if="!connected || pendingToggle !== null" />
+                  <Pause v-else-if="togglePauses" /><Play v-else />
+                </span>
+                <b>{{ feedback }}</b>
+              </button>
             </div>
             <div v-if="!state.asset" class="empty-stage">
               <div class="lunar" aria-hidden="true"></div>
@@ -1013,23 +1042,11 @@ onUnmounted(() => {
             <div class="transport">
               <button
                 class="play"
-                :aria-label="
-                  (state.playing || pendingNames.length) && !blocked
-                    ? '暂停'
-                    : '播放'
-                "
-                :disabled="
-                  !state.asset ||
-                  (!(state.playing && blocked) &&
-                    !can(
-                      state.playing || pendingNames.length ? 'pause' : 'play',
-                    ))
-                "
+                :aria-label="togglePauses ? '暂停' : '播放'"
+                :disabled="!canToggle"
                 @click="toggle"
               >
-                <Pause
-                  v-if="(state.playing || pendingNames.length) && !blocked"
-                /><Play v-else />
+                <Pause v-if="togglePauses" /><Play v-else />
               </button>
               <button
                 aria-label="−10秒"
@@ -1168,7 +1185,9 @@ onUnmounted(() => {
           <small
             >{{ sizeLabel(transfer.sent) }} /
             {{ sizeLabel(transfer.size) }}
-            <span v-if="transfer.bytesPerSecond && transfer.phase === '正在上传'">
+            <span
+              v-if="transfer.bytesPerSecond && transfer.phase === '正在上传'"
+            >
               · 平均 {{ sizeLabel(transfer.bytesPerSecond) }}/s
             </span></small
           >
