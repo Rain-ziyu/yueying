@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from "vue";
+import { computed, ref, nextTick, onMounted, onUnmounted } from "vue";
 import {
-  ArrowRight,
+  Link as LinkIcon,
   Check,
   Copy,
   Film,
@@ -17,14 +17,16 @@ import {
   Send,
   Upload as UploadIcon,
 } from "@lucide/vue";
+import { api, endpoint, upload, type Member, type UploadPhase } from "./api";
+import Lobby from "./Lobby.vue";
+import RoomManagement from "./RoomManagement.vue";
 import {
-  api,
-  endpoint,
-  configureEndpoint,
-  upload,
-  type Member,
-  type UploadPhase,
-} from "./api";
+  roomInfo,
+  remember,
+  type RoomInfo,
+  type Access,
+  type Ability,
+} from "./rooms";
 type State = {
   asset: string;
   position: number;
@@ -33,11 +35,18 @@ type State = {
   version: number;
   at: number;
 };
-const serverUrl = ref(endpoint),
-  configurable = !import.meta.env.VITE_API_URL;
-const member = ref<Member | null>(null),
-  name = ref(""),
-  invite = ref(new URLSearchParams(location.search).get("room") || "");
+const member = ref<Member | null>(null);
+const info = ref<RoomInfo>();
+const manage = ref(false),
+  focusMember = ref("");
+const can = (ability: Ability) =>
+  !!info.value &&
+  (info.value.self.role !== "member" || !!info.value.self.permissions[ability]);
+const copyNotice = ref(""),
+  manualCopy = ref(""),
+  copyFailure = ref(false);
+let copyTimer = 0,
+  copyRequest = 0;
 const assets = ref<
     { id: string; name: string; transcode: string; detail: string }[]
   >([]),
@@ -105,7 +114,15 @@ let socket: WebSocket | undefined,
   loaded = "",
   seq = 0,
   request = 0;
-type Participant = { id: string; name: string; rtt: number | null };
+type Participant = Access & {
+  name: string;
+  rtt: number | null;
+  playback?: {
+    asset: string;
+    position: number;
+    phase: "playing" | "paused" | "buffering";
+  };
+};
 const members = ref<Participant[]>([]);
 const ahead = ref(0),
   waiting = ref(false),
@@ -163,22 +180,49 @@ function flashPlay() {
 function fail(e: unknown) {
   msg.value = e instanceof Error ? e.message : String(e);
 }
-async function join(create: boolean) {
-  try {
-    configureEndpoint(serverUrl.value);
-    const m = await api<Member>(create ? "rooms" : "join", null, {
-      name: name.value.trim(),
-      invite: invite.value.trim(),
-    });
-    sessionStorage.setItem("member", JSON.stringify(m));
-    enter(m);
-  } catch (e) {
-    fail(e);
-  }
+async function showPermissions(id: string) {
+  focusMember.value = id;
+  manage.value = true;
+  await nextTick();
+  document.querySelector(".management")?.scrollIntoView({ block: "nearest" });
 }
-function enter(m: Member) {
+function samplePlayback() {
+  const v = video.value;
+  if (!v || loaded !== state.value.asset || !loaded || v.readyState < 1)
+    return null;
+  return {
+    asset: loaded,
+    position: v.currentTime,
+    phase: waiting.value ? "buffering" : v.paused ? "paused" : "playing",
+  };
+}
+let sampleTimer = 0;
+function reportPlayback() {
+  clearTimeout(sampleTimer);
+  sampleTimer = window.setTimeout(() => {
+    if (socket?.readyState === WebSocket.OPEN)
+      socket.send(
+        JSON.stringify({ type: "progress", playback: samplePlayback() }),
+      );
+  }, 400);
+}
+async function reloadInfo() {
+  const current = member.value;
+  if (!current) return;
+  const result = await roomInfo(current);
+  if (member.value !== current) return;
+  info.value = result;
+  remember(current, result);
+}
+function enter(m: Member, openManagement = false) {
+  manage.value = openManagement;
   member.value = m;
+  sessionStorage.setItem("member", JSON.stringify(m));
+  const url = new URL(location.href);
+  url.searchParams.set("room", m.invite);
+  history.replaceState(null, "", url);
   msg.value = "";
+  reloadInfo().catch(fail);
   connect();
   refresh().catch(fail);
 }
@@ -219,7 +263,12 @@ function connect() {
       const rtt = performance.now() - pingAt;
       if (m.probe === probe)
         ws.send(
-          JSON.stringify({ type: "latency", probe, rtt: Math.round(rtt) }),
+          JSON.stringify({
+            type: "latency",
+            probe,
+            rtt: Math.round(rtt),
+            playback: samplePlayback(),
+          }),
         );
       if (rtt < 2000) {
         clockSamples.push({
@@ -232,6 +281,15 @@ function connect() {
       pingAt = 0;
       clockTimer = window.setTimeout(ping, probe < 3 ? 250 : 4000);
     }
+    if (m.type === "error") {
+      resetCommand();
+      fail(m.message);
+    }
+    if (m.type === "access" && info.value) {
+      info.value.self = m.self;
+      if (!can("upload")) uploadController?.abort();
+    }
+    if (m.type === "settings") reloadInfo().catch(fail);
     if (m.type === "presence") members.value = m.members;
     if (m.type === "state") {
       connected.value = true;
@@ -417,10 +475,33 @@ async function align() {
 }
 function control(p: Partial<State>) {
   if (!connected.value) return;
+  const action =
+    p.asset !== undefined
+      ? "select"
+      : p.playing !== undefined
+        ? p.playing
+          ? "play"
+          : "pause"
+        : p.rate !== undefined
+          ? "rate"
+          : "seek";
+  const ability =
+    action === "seek"
+      ? (p.position ?? 0) >= target()
+        ? "forward"
+        : "back"
+      : action;
+  if (!can(ability)) {
+    resetCommand();
+    fail("房主尚未授权此操作");
+    return;
+  }
   socket?.send(
     JSON.stringify({
-      type: "control",
-      state: { ...state.value, position: target(), ...p },
+      type: "command",
+      action,
+      replay: action === "play" && !!video.value?.ended,
+      state: { version: state.value.version, ...p },
     }),
   );
 }
@@ -472,7 +553,7 @@ async function select(e: Event) {
     current.phase = "上传完成";
     await refresh().catch(fail);
     if (controller.signal.aborted) return;
-    control({ asset: id, position: 0, playing: false });
+    if (can("select")) control({ asset: id, position: 0, playing: false });
   } catch (e) {
     if (!controller.signal.aborted) {
       current.phase = "上传失败";
@@ -508,8 +589,18 @@ function leave() {
   transfer.value = null;
   assets.value = [];
   status.value = "";
+  clearTimeout(copyTimer);
+  copyRequest++;
+  copyNotice.value = manualCopy.value = "";
+  info.value = undefined;
+  manage.value = false;
+  focusMember.value = "";
+  const url = new URL(location.href);
+  url.searchParams.delete("room");
+  history.replaceState(null, "", url);
   duration.value = position.value = 0;
   clearTimeout(retry);
+  clearTimeout(sampleTimer);
   clearTimeout(feedbackTimer);
   resetCommand();
   members.value = [];
@@ -533,19 +624,43 @@ async function fullscreen() {
     await stage.value.requestFullscreen();
   else wide.value = !wide.value;
 }
-async function copy() {
+async function copyInvitation(link: boolean) {
+  const current = member.value;
+  if (!current) return;
+  const url = new URL(
+    import.meta.env.PROD &&
+    (!/^https?:$/.test(location.protocol) ||
+      ["localhost", "tauri.localhost"].includes(location.hostname))
+      ? "https://rain-ziyu.github.io/yueying/"
+      : location.href,
+  );
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("room", current.invite);
+  const value = link ? url.href : current.invite;
+  const id = ++copyRequest;
+  clearTimeout(copyTimer);
+  manualCopy.value = "";
+  copyNotice.value = "";
+  copyFailure.value = false;
   try {
-    await navigator.clipboard.writeText(member.value!.invite);
-    status.value = "房间码已复制";
+    await navigator.clipboard.writeText(value);
+    if (id !== copyRequest) return;
+    copyNotice.value = link ? "邀请链接已复制" : "房间码已复制";
+    copyTimer = window.setTimeout(() => (copyNotice.value = ""), 3000);
   } catch {
-    status.value = member.value!.invite;
+    if (id !== copyRequest) return;
+    copyFailure.value = true;
+    copyNotice.value = "复制失败，请选中后手动复制";
+    manualCopy.value = value;
   }
 }
 onMounted(() => {
   const raw = sessionStorage.getItem("member");
   if (raw) {
     const m = JSON.parse(raw);
-    if (!invite.value || invite.value === m.invite) enter(m);
+    const code = new URL(location.href).searchParams.get("room");
+    if (!code || code === m.invite) enter(m);
   }
   tick = window.setInterval(() => {
     if (
@@ -575,49 +690,63 @@ onUnmounted(() => {
     </div>
   </header>
 
-  <section v-if="!member" class="lobby shell">
-    <div class="poster">
-      <div class="lunar" aria-hidden="true"></div>
-      <div class="poster-caption">
-        <h1>一起看部电影<span>。</span></h1>
-        <p>与朋友共享画面、进度和实时弹幕。</p>
-      </div>
-    </div>
-    <form class="entry" @submit.prevent="join(!invite.trim())">
-      <h2>{{ invite.trim() ? "加入房间" : "创建房间" }}</h2>
-      <label
-        >你的昵称<input
-          v-model="name"
-          required
-          maxlength="40"
-          placeholder="朋友怎么称呼你"
-      /></label>
-      <label
-        >房间码<input v-model="invite" placeholder="新建房间时留空"
-      /></label>
-      <details v-if="configurable">
-        <summary>连接设置</summary>
-        <label
-          >月映服务地址<input v-model="serverUrl" type="url" required
-        /></label>
-      </details>
-      <button class="primary">
-        {{ invite.trim() ? "加入房间" : "创建房间" }}<ArrowRight />
-      </button>
-    </form>
-  </section>
-
+  <Lobby v-if="!member" @enter="enter" @error="fail" />
   <article v-else class="room shell">
     <div class="room-head">
-      <h1>观影房间</h1>
+      <h1>{{ info?.title || "观影房间" }}</h1>
       <span class="connection" :class="{ online: connected }"
         ><i></i>{{ connected ? "已连接" : "连接中…" }}</span
       >
-      <button class="room-code" title="复制房间码" @click="copy">
-        房间码 <b>{{ member.invite }}</b
-        ><Copy />
-      </button>
+      <div class="invite-tools">
+        <button
+          class="room-code"
+          title="复制房间码"
+          aria-label="复制房间码"
+          @click="copyInvitation(false)"
+        >
+          房间码 <b>{{ member.invite }}</b
+          ><Copy />
+        </button>
+        <button class="invite-link" @click="copyInvitation(true)">
+          <LinkIcon />复制链接
+        </button>
+        <button
+          v-if="info?.self.role === 'owner'"
+          class="invite-link"
+          @click="
+            focusMember = '';
+            manage = !manage;
+          "
+        >
+          房间管理
+        </button>
+        <div
+          v-if="copyNotice"
+          class="copy-feedback"
+          :class="{ failed: copyFailure }"
+          role="status"
+        >
+          {{ copyNotice
+          }}<input
+            v-if="manualCopy"
+            readonly
+            :value="manualCopy"
+            aria-label="手动复制邀请"
+            @focus="($event.target as HTMLInputElement).select()"
+          />
+        </div>
+      </div>
     </div>
+    <RoomManagement
+      v-if="manage && info?.self.role === 'owner'"
+      :member="member"
+      :info="info"
+      :focus="focusMember"
+      :online="members.map((m) => m.id)"
+      @update="reloadInfo().catch(fail)"
+      @error="fail"
+      @close="manage = false"
+    />
     <div class="layout">
       <section class="screen-column" aria-label="放映区">
         <div ref="stage" class="player" :class="{ wide }">
@@ -627,8 +756,16 @@ onUnmounted(() => {
               playsinline
               preload="auto"
               @click="toggle"
-              @playing="playbackStarted"
-              @waiting="beginBuffering"
+              @playing="
+                playbackStarted();
+                reportPlayback();
+              "
+              @pause="reportPlayback"
+              @seeked="reportPlayback"
+              @waiting="
+                beginBuffering();
+                reportPlayback();
+              "
               @progress="measureBuffer"
               @canplay="align().catch(fail)"
               @loadedmetadata="
@@ -639,7 +776,9 @@ onUnmounted(() => {
                 position = video?.currentTime || 0;
                 measureBuffer();
               "
-              @ended="control({ playing: false, position: duration })"
+              @ended="
+                can('pause') && control({ playing: false, position: duration })
+              "
               @error="mediaError"
             ></video>
             <div
@@ -682,7 +821,7 @@ onUnmounted(() => {
               :max="duration || 1"
               step=".1"
               :value="position"
-              :disabled="!duration"
+              :disabled="!duration || (!can('forward') && !can('back'))"
               :style="{
                 '--played': (duration ? (position / duration) * 100 : 0) + '%',
               }"
@@ -696,7 +835,11 @@ onUnmounted(() => {
               <button
                 class="play"
                 :aria-label="state.playing && !blocked ? '暂停' : '播放'"
-                :disabled="!state.asset"
+                :disabled="
+                  !state.asset ||
+                  (!(state.playing && blocked) &&
+                    !can(state.playing ? 'pause' : 'play'))
+                "
                 @click="toggle"
               >
                 <Pause v-if="state.playing && !blocked" /><Play v-else />
@@ -704,7 +847,7 @@ onUnmounted(() => {
               <button
                 aria-label="−10秒"
                 title="后退 10 秒"
-                :disabled="!state.asset"
+                :disabled="!state.asset || !can('back')"
                 @click="control({ position: Math.max(0, target() - 10) })"
               >
                 <RotateCcw /><span>10</span>
@@ -712,7 +855,7 @@ onUnmounted(() => {
               <button
                 aria-label="+10秒"
                 title="快进 10 秒"
-                :disabled="!state.asset"
+                :disabled="!state.asset || !can('forward')"
                 @click="
                   control({ position: Math.min(duration, target() + 10) })
                 "
@@ -728,6 +871,7 @@ onUnmounted(() => {
               >
               <select
                 aria-label="倍速"
+                :disabled="!can('rate')"
                 :value="state.rate"
                 @change="
                   control({
@@ -755,9 +899,13 @@ onUnmounted(() => {
             id="danmaku"
             v-model="text"
             maxlength="200"
-            placeholder="发一条实时弹幕"
+            :disabled="!can('chat')"
+            :placeholder="can('chat') ? '发一条实时弹幕' : '当前已禁言'"
           />
-          <button :disabled="!connected || !text.trim()" aria-label="发送">
+          <button
+            :disabled="!connected || !text.trim() || !can('chat')"
+            aria-label="发送"
+          >
             发送<Send />
           </button>
         </form>
@@ -771,30 +919,56 @@ onUnmounted(() => {
           </div>
           <ul>
             <li v-for="person in members" :key="person.id">
-              <span>{{ person.name }}</span
-              ><b>{{ person.rtt === null ? "待测量" : person.rtt + " ms" }}</b>
+              <div class="member-summary">
+                <div>
+                  <strong>{{ person.name }}</strong>
+                  <small
+                    >{{ person.role === "owner" ? "房主" : "成员"
+                    }}{{ info?.self.id === person.id ? " · 我" : "" }}</small
+                  >
+                </div>
+                <span>{{
+                  person.playback && person.playback.asset === state.asset
+                    ? timeLabel(person.playback.position) +
+                      " · " +
+                      {
+                        playing: "播放中",
+                        paused: "暂停",
+                        buffering: "缓冲中",
+                      }[person.playback.phase]
+                    : "等待进度"
+                }}</span>
+              </div>
+              <div class="member-side">
+                <b>{{ person.rtt == null ? "待测量" : person.rtt + " ms" }}</b>
+                <button
+                  v-if="info?.self.role === 'owner' && person.role === 'member'"
+                  @click="showPermissions(person.id)"
+                >
+                  设置权限
+                </button>
+              </div>
             </li>
           </ul>
         </section>
         <div class="library-head">
           <h2>房间片源</h2>
-          <button
-            aria-label="刷新列表"
-            title="刷新列表"
-            @click="refresh().catch(fail)"
-          >
-            <RefreshCw />
-          </button>
         </div>
         <label class="pick" :class="{ busy }"
           ><input
             type="file"
             accept="video/*,.mkv"
-            :disabled="busy"
+            :disabled="busy || !can('upload')"
             @change="select"
           />
           <span class="upload-symbol"><UploadIcon /></span
-          ><span>{{ busy ? "正在处理上传" : "上传本地视频" }}</span>
+          ><span>{{
+            !can("upload")
+              ? "上传需房主授权"
+              : busy
+                ? "正在处理上传"
+                : "上传本地视频"
+          }}</span>
         </label>
         <div
           v-if="transfer"
@@ -821,7 +995,16 @@ onUnmounted(() => {
         </div>
         <div class="list-heading">
           <h3>播放列表</h3>
-          <span>{{ assets.length }} 部</span>
+          <div class="playlist-tools">
+            <span>{{ assets.length }} 部</span>
+            <button
+              aria-label="刷新列表"
+              title="刷新列表"
+              @click="refresh().catch(fail)"
+            >
+              <RefreshCw />
+            </button>
+          </div>
         </div>
         <p v-if="!assets.length" class="empty-list"><FolderOpen />暂无片源</p>
         <div
@@ -832,6 +1015,7 @@ onUnmounted(() => {
         >
           <button
             class="asset-select"
+            :disabled="!can('select')"
             :aria-pressed="state.asset === a.id"
             :aria-label="a.name"
             @click="control({ asset: a.id, position: 0, playing: false })"
@@ -847,6 +1031,7 @@ onUnmounted(() => {
           <button
             v-if="!a.transcode"
             class="transcode"
+            :disabled="!can('upload')"
             @click="transcode(a.id)"
           >
             申请转码</button

@@ -24,6 +24,9 @@ import (
 )
 
 func (a *app) queueTranscode(w http.ResponseWriter, r *http.Request, u identity) error {
+	if !u.allows("upload") {
+		return forbidden()
+	}
 	if os.Getenv("MPS_ENABLED") != "1" {
 		return bad("此环境尚未启用云转码")
 	}

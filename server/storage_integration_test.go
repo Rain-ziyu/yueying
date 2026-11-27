@@ -77,6 +77,40 @@ func TestStorageSwitch(t *testing.T) {
 	owner := room["token"].(string)
 	peer := call("join", "", map[string]any{"name": "朋友", "invite": room["invite"]}, 200)["token"].(string)
 	other := call("rooms", "", map[string]string{"name": "另一房间"}, 200)["token"].(string)
+	guestInfo := call("room", peer, nil, 200)["self"].(map[string]any)
+	if guestInfo["role"] != "member" || call("room", owner, nil, 200)["self"].(map[string]any)["role"] != "owner" {
+		t.Fatal("unexpected room roles")
+	}
+	grant := map[string]any{"id": guestInfo["id"], "action": "upload", "allow": true}
+	call("room/permission", peer, grant, 403)
+	call("room/permission", other, grant, 400)
+	call("uploads", peer, map[string]any{}, 403)
+	call("room/permission", owner, grant, 200)
+	if !call("room", peer, nil, 200)["self"].(map[string]any)["permissions"].(map[string]any)["upload"].(bool) {
+		t.Fatal("upload grant not persisted")
+	}
+	grant["allow"] = false
+	call("room/permission", owner, grant, 200)
+	call("uploads", peer, map[string]any{}, 403)
+	props := map[string]any{"title": "测试放映厅", "listed": true}
+	call("room/settings", peer, props, 403)
+	call("room/settings", owner, props, 200)
+	appears := func() bool {
+		for _, item := range call("rooms", "", nil, 200)["rooms"].([]any) {
+			if item.(map[string]any)["invite"] == room["invite"] {
+				return true
+			}
+		}
+		return false
+	}
+	if !appears() {
+		t.Fatal("public room missing")
+	}
+	props["listed"] = false
+	call("room/settings", owner, props, 200)
+	if appears() {
+		t.Fatal("private room listed")
+	}
 	create := func() string {
 		return call("uploads", owner, map[string]any{"name": "movie.mp4", "bytes": 6, "protocols": []string{protocol}}, 200)["id"].(string)
 	}

@@ -11,6 +11,9 @@ import (
 const protocol = "s3-multipart-v1"
 
 func (a *app) begin(w http.ResponseWriter, r *http.Request, u identity) error {
+	if !u.allows("upload") {
+		return forbidden()
+	}
 	var p struct {
 		Name      string
 		Bytes     int64
@@ -52,6 +55,9 @@ func (a *app) begin(w http.ResponseWriter, r *http.Request, u identity) error {
 	return respond(w, map[string]any{"id": id, "protocol": s.protocolName(), "partSize": partSize})
 }
 func (a *app) upload(w http.ResponseWriter, r *http.Request, u identity) error {
+	if !u.allows("upload") && chi.URLParam(r, "op") != "cancel" {
+		return forbidden()
+	}
 	op, id := chi.URLParam(r, "op"), chi.URLParam(r, "id")
 	c := r.Context()
 	tx, e := a.db.Begin(c)

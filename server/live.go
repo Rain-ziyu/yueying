@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"sort"
 	"sync"
@@ -20,11 +21,17 @@ type state struct {
 	At       int64   `json:"at"`
 }
 
+type playbackSample struct {
+	Asset    string  `json:"asset"`
+	Position float64 `json:"position"`
+	Phase    string  `json:"phase"`
+}
 type participant struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	RTT  *int   `json:"rtt"`
-	asOf time.Time
+	access
+	Playback *playbackSample `json:"playback"`
+	Name     string          `json:"name"`
+	RTT      *int            `json:"rtt"`
+	asOf     time.Time
 }
 
 type peer struct {
@@ -61,6 +68,7 @@ func (p *peer) writeLoop() {
 type liveRoom struct {
 	sync.Mutex
 	clients map[*peer]bool
+	state   state
 }
 
 func (lr *liveRoom) roster() []participant {
@@ -72,6 +80,7 @@ func (lr *liveRoom) roster() []participant {
 		}
 		if time.Since(m.asOf) > 20*time.Second {
 			m.RTT = nil
+			m.Playback = nil
 		}
 		members[m.ID] = m
 	}
@@ -107,11 +116,11 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := r.Context()
-	var room, name string
-	if a.db.QueryRow(c, "select room,nickname from members where token=$1", hash(auth.Token)).Scan(&room, &name) != nil {
+	var room string
+	if a.db.QueryRow(c, "select room from members where token=$1", hash(auth.Token)).Scan(&room) != nil {
 		return
 	}
-	p := &peer{subscribed: auth.Presence, ws: ws, out: make(chan any, 32), done: make(chan struct{}), member: participant{ID: hash("presence:" + auth.Token)[:16], Name: name}}
+	p := &peer{subscribed: auth.Presence, ws: ws, out: make(chan any, 32), done: make(chan struct{})}
 	defer close(p.done)
 	go p.writeLoop()
 	a.mu.Lock()
@@ -123,10 +132,18 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 	lr.Lock()
 	lr.clients[p] = true
 	a.mu.Unlock()
-	var snapshot state
-	e = a.db.QueryRow(c, "select state from rooms where id=$1", room).Scan(&snapshot)
+	u := identity{token: hash(auth.Token)}
+	e = a.identify(c, &u)
 	if e == nil {
-		p.send(map[string]any{"type": "state", "state": snapshot, "now": time.Now().UnixMilli()})
+		p.member.access = u.access
+		p.member.Name = u.name
+		e = a.db.QueryRow(c, "select state from rooms where id=$1", room).Scan(&lr.state)
+	}
+	if e == nil {
+		p.send(map[string]any{"type": "state", "state": lr.state, "now": time.Now().UnixMilli()})
+		if p.subscribed {
+			p.send(map[string]any{"type": "access", "self": u.access})
+		}
 		lr.presence()
 	}
 	lr.Unlock()
@@ -146,12 +163,15 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var lastProbe int64
+	var lastSample time.Time
 	for {
 		var m struct {
-			Type, Text string
-			State      state
-			Probe      int64
-			RTT        *int
+			Type, Text, Action string
+			Playback           *playbackSample
+			Replay             bool
+			State              state
+			Probe              int64
+			RTT                *int
 		}
 		ws.SetReadDeadline(time.Now().Add(150 * time.Second))
 		if ws.ReadJSON(&m) != nil {
@@ -164,8 +184,15 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 		}
 		lr.Lock()
 		switch m.Type {
+		case "progress":
+			if time.Since(lastSample) >= 300*time.Millisecond {
+				lastSample = time.Now()
+				p.sample(m.Playback, lr.state.Asset)
+				lr.presence()
+			}
 		case "latency":
 			if m.Probe > 0 && m.Probe == lastProbe && m.RTT != nil && *m.RTT >= 0 && *m.RTT <= 120000 {
+				p.sample(m.Playback, lr.state.Asset)
 				first := p.member.RTT == nil
 				p.member.RTT = m.RTT
 				p.member.asOf = time.Now()
@@ -177,11 +204,21 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		case "chat":
+			if !p.member.allows("chat") {
+				p.denied()
+				break
+			}
 			if len([]rune(m.Text)) > 0 && len([]rune(m.Text)) <= 200 {
-				lr.broadcast(map[string]string{"type": "chat", "name": name, "text": m.Text})
+				lr.broadcast(map[string]string{"type": "chat", "name": u.name, "text": m.Text})
 			}
 		case "control":
-			a.control(c, lr, room, m.State)
+			if p.member.Role != "owner" && p.member.Role != "legacy" {
+				p.denied()
+				break
+			}
+			a.control(c, lr, room, p, m.State)
+		case "command":
+			a.command(c, lr, room, p, m.Action, m.State, m.Replay)
 		}
 		lr.Unlock()
 	}
@@ -191,7 +228,7 @@ func (lr *liveRoom) broadcast(m any) {
 		p.send(m)
 	}
 }
-func (a *app) control(c context.Context, lr *liveRoom, room string, s state) {
+func (a *app) control(c context.Context, lr *liveRoom, room string, p *peer, s state) {
 	if s.Position < 0 || s.Position > 604800 || s.Rate < 0.25 || s.Rate > 4 {
 		return
 	}
@@ -204,7 +241,77 @@ func (a *app) control(c context.Context, lr *liveRoom, room string, s state) {
 	}
 	res, e := a.db.Exec(c, "update rooms set state=$1 where id=$2 and (state->>'version')::bigint=$3 and exists(select 1 from assets where id=$4 and assets.room=$2 and ready)", raw, room, prior, s.Asset)
 	if e != nil || res.RowsAffected() != 1 {
+		p.send(map[string]string{"type": "error", "message": "房间状态已变化，请重试"})
 		return
 	}
+	lr.state = s
 	lr.broadcast(map[string]any{"type": "state", "state": s, "now": time.Now().UnixMilli()})
+}
+
+func (p *peer) denied() {
+	p.send(map[string]string{"type": "error", "message": "房主尚未授权此操作"})
+}
+
+// Derive all unchanged fields from the authoritative room clock. A play or
+// pause permission alone must not allow a client to seek or replace media.
+func (a *app) command(c context.Context, lr *liveRoom, room string, p *peer, action string, intent state, replay bool) {
+	s := lr.state
+	if intent.Version != s.Version {
+		p.send(map[string]any{"type": "state", "state": s, "now": time.Now().UnixMilli()})
+		return
+	}
+	if s.Playing {
+		s.Position += float64(max(int64(0), time.Now().UnixMilli()-s.At)) * s.Rate / 1000
+	}
+	if action == "seek" {
+		if intent.Position >= s.Position {
+			action = "forward"
+		} else {
+			action = "back"
+		}
+	}
+	if !p.member.allows(action) {
+		p.denied()
+		return
+	}
+	switch action {
+	case "play":
+		if replay {
+			if !p.member.allows("back") {
+				p.denied()
+				return
+			}
+			s.Position = 0
+		}
+		s.Playing = true
+	case "pause":
+		s.Playing = false
+	case "forward", "back":
+		if (action == "forward" && intent.Position < s.Position) || (action == "back" && intent.Position > s.Position) {
+			p.denied()
+			return
+		}
+		s.Position = intent.Position
+	case "rate":
+		s.Rate = intent.Rate
+	case "select":
+		if intent.Asset == s.Asset && (!p.member.allows("back") || !p.member.allows("pause")) {
+			p.denied()
+			return
+		}
+		s.Asset = intent.Asset
+		s.Position = 0
+		s.Playing = false
+	default:
+		return
+	}
+	s.Position = math.Min(s.Position, 604800)
+	a.control(c, lr, room, p, s)
+}
+
+func (p *peer) sample(q *playbackSample, asset string) {
+	p.member.Playback = nil
+	if q != nil && q.Asset == asset && q.Asset != "" && q.Position >= 0 && q.Position <= 604800 && (q.Phase == "playing" || q.Phase == "paused" || q.Phase == "buffering") {
+		p.member.Playback = q
+	}
 }

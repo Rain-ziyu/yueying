@@ -31,7 +31,10 @@ type app struct {
 	mu                sync.Mutex
 	rooms             map[string]*liveRoom
 }
-type identity struct{ room, name, token string }
+type identity struct {
+	room, name, token string
+	access
+}
 type handler func(http.ResponseWriter, *http.Request, identity) error
 type fault struct {
 	code int
@@ -65,7 +68,7 @@ func (a *app) wrap(auth bool, h handler) http.HandlerFunc {
 		var e error
 		if auth {
 			u.token = hash(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-			e = a.db.QueryRow(r.Context(), "select room,nickname from members where token=$1", u.token).Scan(&u.room, &u.name)
+			e = a.identify(r.Context(), &u)
 			if e != nil {
 				http.Error(w, "请重新加入房间", 401)
 				return
@@ -111,6 +114,11 @@ func (a *app) routes() http.Handler {
 		}
 		w.WriteHeader(204)
 	})
+	r.Get("/api/v1/rooms", a.wrap(false, a.directory))
+	r.Get("/api/v1/room", a.wrap(true, a.roomInfo))
+	r.Post("/api/v1/room/settings", a.wrap(true, a.settings))
+	r.Get("/api/v1/room/members", a.wrap(true, a.roomMembers))
+	r.Post("/api/v1/room/permission", a.wrap(true, a.permission))
 	r.Post("/api/v1/rooms", a.wrap(false, a.join))
 	r.Post("/api/v1/join", a.wrap(false, a.join))
 	r.Post("/api/v1/uploads", a.wrap(true, a.begin))
@@ -122,7 +130,10 @@ func (a *app) routes() http.Handler {
 	return r
 }
 func (a *app) join(w http.ResponseWriter, r *http.Request, _ identity) error {
-	var p struct{ Name, Invite string }
+	var p struct {
+		Name, Invite, Title string
+		Listed              bool
+	}
 	if e := body(r, &p); e != nil {
 		return e
 	}
@@ -136,9 +147,17 @@ func (a *app) join(w http.ResponseWriter, r *http.Request, _ identity) error {
 	}
 	defer tx.Rollback(c)
 	id := token()
+	t := token()
+	p.Title = strings.TrimSpace(p.Title)
+	if p.Title == "" {
+		p.Title = "观影房间"
+	}
+	if len([]rune(p.Title)) > 60 {
+		return bad("房间名称最多 60 字")
+	}
 	if strings.HasSuffix(r.URL.Path, "/rooms") {
 		p.Invite = token()[:16]
-		_, e = tx.Exec(c, "insert into rooms(id,invite)values($1,$2)", id, p.Invite)
+		_, e = tx.Exec(c, "insert into rooms(id,invite,title,listed,owner_token)values($1,$2,$3,$4,$5)", id, p.Invite, p.Title, p.Listed, hash(t))
 	} else {
 		e = tx.QueryRow(c, "select id from rooms where invite=$1", p.Invite).Scan(&id)
 		if e != nil {
@@ -148,8 +167,7 @@ func (a *app) join(w http.ResponseWriter, r *http.Request, _ identity) error {
 	if e != nil {
 		return e
 	}
-	t := token()
-	_, e = tx.Exec(c, "insert into members values($1,$2,$3)", hash(t), id, p.Name)
+	_, e = tx.Exec(c, "insert into members(token,room,nickname) values($1,$2,$3)", hash(t), id, p.Name)
 	if e != nil {
 		return e
 	}
