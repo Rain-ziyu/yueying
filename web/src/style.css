@@ -215,7 +215,8 @@ p {
   margin-top: 8px;
 }
 .entry {
-  align-self: center;
+  align-self: start;
+  min-width: 0;
   padding: clamp(24px, 4vw, 52px);
 }
 .entry h2,
