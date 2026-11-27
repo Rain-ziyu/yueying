@@ -99,12 +99,67 @@ const state = ref<State>({
   chats = ref<{ id: number; line: number; text: string }[]>([]);
 let socket: WebSocket | undefined,
   retry = 0,
-  renew = 0,
+  expiresAt = 0,
   tick = 0,
   offset = 0,
   loaded = "",
   seq = 0,
   request = 0;
+type Participant = { id: string; name: string; rtt: number | null };
+const members = ref<Participant[]>([]);
+const ahead = ref(0),
+  waiting = ref(false),
+  blocked = ref(false),
+  showPlay = ref(false);
+let feedbackTimer = 0,
+  commandTimer = 0;
+const pendingToggle = ref<boolean | null>(null);
+const feedback = computed(() => {
+  if (pendingToggle.value !== null)
+    return pendingToggle.value ? "正在播放…" : "正在暂停…";
+  if (!state.value.playing) return "已暂停";
+  if (blocked.value) return "点按播放";
+  if (waiting.value) return "缓冲中";
+  return showPlay.value ? "播放中" : "";
+});
+function resetCommand() {
+  clearTimeout(commandTimer);
+  pendingToggle.value = null;
+}
+let opening = "",
+  needsSeek = false,
+  bufferingSince = 0,
+  lastJump = -Infinity;
+let canJumpOutsideBuffer = true;
+let playAttempt: Promise<void> | undefined;
+function bufferAhead(v: HTMLVideoElement, at: number) {
+  for (let i = 0; i < v.buffered.length; i++) {
+    if (v.buffered.start(i) <= at + 0.05 && v.buffered.end(i) > at)
+      return v.buffered.end(i) - at;
+  }
+  return 0;
+}
+function measureBuffer() {
+  if (video.value)
+    ahead.value = bufferAhead(video.value, video.value.currentTime);
+}
+function beginBuffering() {
+  if (!state.value.playing || blocked.value) return;
+  if (!waiting.value) bufferingSince = performance.now();
+  waiting.value = true;
+}
+function playbackStarted() {
+  if (!state.value.playing) {
+    video.value?.pause();
+    return;
+  }
+  waiting.value = blocked.value = false;
+}
+function flashPlay() {
+  clearTimeout(feedbackTimer);
+  showPlay.value = true;
+  feedbackTimer = window.setTimeout(() => (showPlay.value = false), 850);
+}
 function fail(e: unknown) {
   msg.value = e instanceof Error ? e.message : String(e);
 }
@@ -138,42 +193,50 @@ function connect() {
   const ws = new WebSocket(endpoint.replace(/^http/, "ws") + "/api/v1/live");
   socket = ws;
   let synced = false;
-  let bestRtt = Infinity;
-  let pingAt = 0;
-  let samples = 0;
-  let clockTimer = 0;
+  const clockSamples: { rtt: number; offset: number }[] = [];
+  let probe = 0,
+    pingAt = 0,
+    clockTimer = 0,
+    watchdog = 0;
   function ping() {
     if (socket !== ws || ws.readyState !== WebSocket.OPEN) return;
     pingAt = performance.now();
-    ws.send(JSON.stringify({ type: "ping" }));
+    ws.send(JSON.stringify({ type: "ping", probe: ++probe }));
+    watchdog = window.setTimeout(() => ws.close(), 25000);
   }
   ws.onopen = () => {
-    ws.send(JSON.stringify({ token: member.value?.token }));
+    ws.send(JSON.stringify({ token: member.value?.token, presence: true }));
   };
   ws.onmessage = async (event) => {
     if (socket !== ws) return;
     const m = JSON.parse(event.data);
-    if (m.type === "pong" && pingAt) {
-      const received = performance.now();
-      const rtt = received - pingAt;
-      if (rtt < bestRtt) {
-        bestRtt = rtt;
-        offset = m.now - (performance.timeOrigin + pingAt + rtt / 2);
+    if (
+      m.type === "pong" &&
+      pingAt &&
+      (m.probe === probe || m.probe === undefined)
+    ) {
+      clearTimeout(watchdog);
+      const rtt = performance.now() - pingAt;
+      if (m.probe === probe)
+        ws.send(
+          JSON.stringify({ type: "latency", probe, rtt: Math.round(rtt) }),
+        );
+      if (rtt < 2000) {
+        clockSamples.push({
+          rtt,
+          offset: m.now - performance.timeOrigin - pingAt - rtt / 2,
+        });
+        if (clockSamples.length > 8) clockSamples.shift();
+        offset = clockSamples.reduce((a, b) => (a.rtt <= b.rtt ? a : b)).offset;
       }
       pingAt = 0;
-      samples++;
-      if (samples % 3 === 0) {
-        clockTimer = window.setTimeout(() => {
-          bestRtt = Infinity;
-          ping();
-        }, 60000);
-      } else {
-        clockTimer = window.setTimeout(ping, 250);
-      }
+      clockTimer = window.setTimeout(ping, probe < 3 ? 250 : 4000);
     }
+    if (m.type === "presence") members.value = m.members;
     if (m.type === "state") {
       connected.value = true;
-      if (!synced) {
+      const first = !synced;
+      if (first) {
         offset = m.now - (performance.timeOrigin + performance.now());
         synced = true;
         ping();
@@ -184,7 +247,27 @@ function connect() {
         !assets.value.some((a) => a.id === m.state.asset)
       )
         refresh().catch(fail);
-      state.value = m.state;
+      resetCommand();
+      const next: State = m.state;
+      const prev = state.value;
+      const priorPosition =
+        prev.position +
+        (prev.playing
+          ? (Math.max(0, next.at - prev.at) * prev.rate) / 1000
+          : 0);
+      if (
+        first ||
+        prev.asset !== next.asset ||
+        !next.playing ||
+        Math.abs(next.position - priorPosition) > 0.75
+      )
+        needsSeek = true;
+      state.value = next;
+      if (next.playing && !prev.playing) {
+        beginBuffering();
+        flashPlay();
+      }
+      if (!next.playing) waiting.value = blocked.value = showPlay.value = false;
       await align().catch(fail);
     }
     if (m.type === "chat") {
@@ -198,8 +281,11 @@ function connect() {
   };
   ws.onclose = () => {
     clearTimeout(clockTimer);
+    clearTimeout(watchdog);
     if (socket !== ws) return;
     connected.value = false;
+    members.value = [];
+    resetCommand();
     retry = window.setTimeout(connect, 1800);
   };
 }
@@ -218,21 +304,54 @@ function target() {
   );
 }
 async function source(id: string) {
+  if (opening === id) return;
   const nonce = ++request;
-  const result = await api<{ url: string; ttl: number }>(
-    "assets/" + id + "/play",
-    member.value,
-  );
-  if (nonce !== request || id !== state.value.asset) return;
-  const v = video.value;
-  if (!v) return;
-  loaded = id;
-  v.src = result.url;
-  clearTimeout(renew);
-  renew = window.setTimeout(
-    () => source(id).catch(fail),
-    (result.ttl - 60) * 1000,
-  );
+  opening = id;
+  try {
+    const result = await api<{ url: string; ttl: number }>(
+      "assets/" + id + "/play",
+      member.value,
+    );
+    if (nonce !== request || id !== state.value.asset || !video.value) return;
+    loaded = id;
+    expiresAt = Date.now() + result.ttl * 1000;
+    needsSeek = true;
+    ahead.value = position.value = duration.value = 0;
+    blocked.value = false;
+    playAttempt = undefined;
+    video.value.src = result.url;
+    video.value.load();
+    beginBuffering();
+  } finally {
+    if (nonce === request) opening = "";
+  }
+}
+function mediaError() {
+  if (
+    state.value.asset &&
+    loaded === state.value.asset &&
+    Date.now() >= expiresAt - 60000
+  ) {
+    source(loaded).catch(fail);
+  } else {
+    msg.value = "无法播放此片源，请检查格式或网络";
+  }
+}
+function startPlayback(v: HTMLVideoElement) {
+  if (playAttempt || blocked.value) return;
+  const attempt = v.play();
+  playAttempt = attempt;
+  attempt
+    .catch((e: DOMException) => {
+      if (playAttempt !== attempt || !state.value.playing) return;
+      if (e.name === "NotAllowedError") {
+        blocked.value = true;
+        waiting.value = false;
+      } else if (e.name !== "AbortError") fail(e);
+    })
+    .finally(() => {
+      if (playAttempt === attempt) playAttempt = undefined;
+    });
 }
 async function align() {
   const v = video.value,
@@ -243,20 +362,58 @@ async function align() {
     return;
   }
   if (v.readyState < 1) return;
+  const now = performance.now();
   const t = Math.min(
     target(),
     Number.isFinite(v.duration) ? v.duration : Infinity,
   );
-  if (Math.abs(v.currentTime - t) > (s.playing ? 0.45 : 0.08))
-    v.currentTime = t;
-  v.playbackRate = s.rate;
-  if (s.playing && v.paused && !v.ended) {
-    try {
-      await v.play();
-    } catch {
-      status.value = "点按播放器启用声音与播放";
+  const drift = t - v.currentTime;
+  if (!s.playing && !v.paused) v.pause();
+  if (needsSeek) {
+    needsSeek = false;
+    canJumpOutsideBuffer = true;
+    v.playbackRate = s.rate;
+    if (Math.abs(drift) > 0.08) {
+      v.currentTime = t;
+      lastJump = now;
+      beginBuffering();
     }
-  } else if (!s.playing && !v.paused) v.pause();
+  }
+  measureBuffer();
+  if (!s.playing) {
+    v.playbackRate = s.rate;
+    return;
+  }
+  if (v.seeking || blocked.value || v.ended) return;
+  if (Math.abs(drift) < 1) canJumpOutsideBuffer = true;
+  if (waiting.value || v.paused || v.readyState < 3) {
+    beginBuffering();
+    // A browser can cap preloading while paused. Allow native playback to take over.
+    const goal = Math.min(6 * s.rate, Math.max(0, v.duration - v.currentTime));
+    if (ahead.value + 0.1 < goal && now - bufferingSince < 6000) {
+      if (!v.paused) v.pause();
+      return;
+    }
+    if (v.paused) startPlayback(v);
+    return;
+  }
+  // Never chase an advancing clock with a series of unbuffered range requests.
+  if (
+    Math.abs(drift) > 2 &&
+    now - lastJump > 5000 &&
+    (bufferAhead(v, t) >= Math.min(1, v.duration - t) ||
+      (canJumpOutsideBuffer && Math.abs(drift) > 10))
+  ) {
+    canJumpOutsideBuffer = false;
+    lastJump = now;
+    v.currentTime = t;
+    beginBuffering();
+    return;
+  }
+  const adjustment =
+    Math.abs(drift) < 0.12 ? 0 : Math.max(-0.08, Math.min(0.08, drift * 0.12));
+  const rate = s.rate * (1 + adjustment);
+  if (Math.abs(v.playbackRate - rate) > 0.005) v.playbackRate = rate;
 }
 function control(p: Partial<State>) {
   if (!connected.value) return;
@@ -268,13 +425,21 @@ function control(p: Partial<State>) {
   );
 }
 function toggle() {
-  if (state.value.playing && video.value?.paused) {
-    video.value.play().catch(fail);
+  if (!connected.value || !state.value.asset || pendingToggle.value !== null)
+    return;
+  if (state.value.playing && blocked.value && video.value) {
+    blocked.value = false;
+    startPlayback(video.value);
     return;
   }
+  pendingToggle.value = !state.value.playing;
+  commandTimer = window.setTimeout(() => {
+    resetCommand();
+    status.value = "尚未收到房间确认";
+  }, 10000);
   control({
     playing: !state.value.playing,
-    ...(video.value?.ended ? { position: 0 } : {}),
+    position: video.value?.ended ? 0 : (video.value?.currentTime ?? target()),
   });
 }
 async function select(e: Event) {
@@ -345,7 +510,12 @@ function leave() {
   status.value = "";
   duration.value = position.value = 0;
   clearTimeout(retry);
-  clearTimeout(renew);
+  clearTimeout(feedbackTimer);
+  resetCommand();
+  members.value = [];
+  waiting.value = blocked.value = showPlay.value = false;
+  opening = "";
+  playAttempt = undefined;
   const old = socket;
   socket = undefined;
   old?.close();
@@ -382,10 +552,10 @@ onMounted(() => {
       connected.value &&
       video.value &&
       loaded === state.value.asset &&
-      video.value.readyState >= 2
+      video.value.readyState >= 1
     )
       align().catch(fail);
-  }, 3000);
+  }, 500);
 });
 onUnmounted(() => {
   clearInterval(tick);
@@ -455,16 +625,38 @@ onUnmounted(() => {
             <video
               ref="video"
               playsinline
+              preload="auto"
               @click="toggle"
-              @playing="align().catch(fail)"
+              @playing="playbackStarted"
+              @waiting="beginBuffering"
+              @progress="measureBuffer"
+              @canplay="align().catch(fail)"
               @loadedmetadata="
                 duration = video?.duration || 0;
                 align().catch(fail);
               "
-              @timeupdate="position = video?.currentTime || 0"
+              @timeupdate="
+                position = video?.currentTime || 0;
+                measureBuffer();
+              "
               @ended="control({ playing: false, position: duration })"
-              @error="msg = '无法播放此片源，请检查格式或网络'"
+              @error="mediaError"
             ></video>
+            <div
+              v-if="state.asset && feedback"
+              class="play-feedback"
+              aria-live="polite"
+            >
+              <span
+                ><Pause
+                  v-if="
+                    pendingToggle === false ||
+                    (pendingToggle === null && !state.playing)
+                  " /><RefreshCw
+                  v-else-if="waiting && pendingToggle === null" /><Play
+                  v-else /></span
+              ><b>{{ feedback }}</b>
+            </div>
             <div v-if="!state.asset" class="empty-stage">
               <div class="lunar" aria-hidden="true"></div>
               <div>
@@ -503,11 +695,11 @@ onUnmounted(() => {
             <div class="transport">
               <button
                 class="play"
-                :aria-label="state.playing ? '暂停' : '播放'"
+                :aria-label="state.playing && !blocked ? '暂停' : '播放'"
                 :disabled="!state.asset"
                 @click="toggle"
               >
-                <Pause v-if="state.playing" /><Play v-else />
+                <Pause v-if="state.playing && !blocked" /><Play v-else />
               </button>
               <button
                 aria-label="−10秒"
@@ -530,6 +722,9 @@ onUnmounted(() => {
               <span class="time"
                 >{{ timeLabel(position) }} <i>/</i>
                 {{ timeLabel(duration) }}</span
+              >
+              <small v-if="state.asset" class="buffer-info"
+                >已缓冲 {{ Math.floor(ahead) }} 秒</small
               >
               <select
                 aria-label="倍速"
@@ -569,6 +764,18 @@ onUnmounted(() => {
         <small v-if="status" class="notice" role="status">{{ status }}</small>
       </section>
       <aside class="library">
+        <section class="members" aria-label="在线成员">
+          <div class="list-heading">
+            <h3>在线成员</h3>
+            <span>到同步服务器的延迟</span>
+          </div>
+          <ul>
+            <li v-for="person in members" :key="person.id">
+              <span>{{ person.name }}</span
+              ><b>{{ person.rtt === null ? "待测量" : person.rtt + " ms" }}</b>
+            </li>
+          </ul>
+        </section>
         <div class="library-head">
           <h2>房间片源</h2>
           <button
