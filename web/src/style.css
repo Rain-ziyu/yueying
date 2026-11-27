@@ -1063,16 +1063,28 @@ progress::-moz-progress-bar {
   text-decoration: underline;
 }
 .management {
+  position: fixed;
+  inset: 0;
+  width: min(34rem, calc(100% - 32px));
+  max-height: calc(100% - 32px);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  margin: auto;
+  padding: 0;
+  color: var(--ink);
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 20px;
-  margin-bottom: 18px;
+  box-shadow: 0 16px 60px #10161335;
 }
+.management::backdrop { background: #151b1899; }
+.management-body { padding: clamp(16px, 4vw, 26px); }
 .management .library-head button {
-  width: auto;
-  padding: 0 8px;
-  font-size: 13px;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
 }
 .management h3 {
   margin: 16px 0 7px;
@@ -1081,6 +1093,9 @@ progress::-moz-progress-bar {
   font-size: 13px;
   color: var(--green);
 }
+.management p[role] { margin-top: 12px; }
+.management p.management-error { color: #8e3528; }
+.management select { max-width: 100%; }
 .manage-form {
   flex-wrap: wrap;
   gap: 12px;

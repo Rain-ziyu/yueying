@@ -5,7 +5,7 @@ import { api, configureEndpoint, endpoint, type Member } from "./api";
 import { session, accountApi, accountJoin } from "./account";
 import { guestRooms, saved, remember, forget } from "./rooms";
 const emit = defineEmits<{
-  enter: [member: Member, manage?: boolean];
+  enter: [member: Member];
   error: [error: unknown];
 }>();
 const invite = ref(new URLSearchParams(location.search).get("room") || "");
@@ -75,7 +75,7 @@ async function bind(g: ReturnType<typeof guestRooms>[number]) {
 }
 async function openCloud(r: Card) {
   try {
-    emit("enter", await accountJoin(r.invite, r.name), r.owner);
+    emit("enter", await accountJoin(r.invite, r.name));
   } catch (e) {
     emit("error", e);
   }
@@ -247,13 +247,13 @@ onMounted(() => {
           :key="r.invite"
           @click="openCloud(r)"
         >
-          {{ r.title }}<span>{{ r.owner ? "进入管理" : "重新加入" }} →</span>
+          {{ r.title }}<span>{{ r.owner ? "进入房间" : "重新加入" }} →</span>
         </button>
         <p v-if="guests.length">本机访客身份</p>
         <div v-for="g in guests" :key="g.member.room" class="guest-row">
           <button
             class="room-row"
-            @click="emit('enter', g.member, g.role === 'owner')"
+            @click="emit('enter', g.member)"
           >
             {{ g.title
             }}<span>{{ g.role === "owner" ? "房主" : "成员" }} →</span>

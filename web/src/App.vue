@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch, nextTick, onMounted, onUnmounted } from "vue";
+import { computed, ref, watch, onMounted, onUnmounted } from "vue";
 import {
   Link as LinkIcon,
   Check,
@@ -263,11 +263,9 @@ function flashPlay() {
 function fail(e: unknown) {
   msg.value = e instanceof Error ? e.message : String(e);
 }
-async function showPermissions(id: string) {
+function showPermissions(id: string) {
   focusMember.value = id;
   manage.value = true;
-  await nextTick();
-  document.querySelector(".management")?.scrollIntoView({ block: "nearest" });
 }
 function samplePlayback() {
   const v = video.value;
@@ -314,8 +312,8 @@ async function bindCurrent() {
   leave();
   enter(joined);
 }
-function enter(m: Member, openManagement = false) {
-  manage.value = openManagement;
+function enter(m: Member) {
+  manage.value = false;
   member.value = m;
   sessionStorage.setItem("member", JSON.stringify(m));
   const url = new URL(location.href);
@@ -853,10 +851,8 @@ onUnmounted(() => {
         <button
           v-if="info?.self.role === 'owner'"
           class="invite-link"
-          @click="
-            focusMember = '';
-            manage = !manage;
-          "
+          aria-haspopup="dialog"
+          @click="showPermissions('')"
         >
           房间管理
         </button>
@@ -884,7 +880,6 @@ onUnmounted(() => {
       :focus="focusMember"
       :online="members.map((m) => m.id)"
       @update="reloadInfo().catch(fail)"
-      @error="fail"
       @close="manage = false"
     />
     <div class="layout">
@@ -1083,6 +1078,7 @@ onUnmounted(() => {
                 <b>{{ person.rtt == null ? "待测量" : person.rtt + " ms" }}</b>
                 <button
                   v-if="info?.self.role === 'owner' && person.role === 'member'"
+                  aria-haspopup="dialog"
                   @click="showPermissions(person.id)"
                 >
                   设置权限
