@@ -318,6 +318,7 @@ p {
   min-width: 0;
 }
 .player {
+  position: relative;
   overflow: hidden;
   background: var(--night);
   border-radius: var(--radius);
@@ -396,8 +397,24 @@ video {
   }
 }
 .controls {
+  position: absolute;
+  inset: auto 0 0;
+  z-index: 2;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s ease;
   padding: 2px 18px 10px;
-  background: #191d1b;
+  background: linear-gradient(transparent, #101512ee 34%);
+}
+.controls-visible, .controls:active, .controls:has(:focus-visible), .controls:has(:active) {
+  opacity: 1;
+  pointer-events: auto;
+}
+@supports selector(select:open) {
+  .controls:has(select:open) { opacity: 1; pointer-events: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .controls { transition: none; }
 }
 .controls input {
   display: block;
@@ -1079,50 +1096,80 @@ progress::-moz-progress-bar {
   box-shadow: 0 16px 60px #10161335;
 }
 .management::backdrop { background: #151b1899; }
-.management-body { padding: clamp(16px, 4vw, 26px); }
-.management .library-head button {
+.management-body {
+  --inset: clamp(18px, 4vw, 28px);
+  padding: 0 var(--inset) var(--inset);
+}
+.management-head, .settings-actions, .listing-switch, .members-empty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.management-head {
+  min-height: 70px;
+  border-bottom: 1px solid var(--line);
+}
+.management-head > svg { color: var(--green); }
+.management-head h2 { font-size: 20px; }
+.management-head button {
+  display: grid;
+  place-items: center;
+  margin-left: auto;
   width: 36px;
   height: 36px;
+  border-radius: 50%;
+  color: var(--muted);
+  background: var(--paper);
+}
+.management-head button:hover { color: var(--ink); background: var(--line); }
+.management .manage-form { display: grid; align-items: stretch; gap: 14px; padding: 20px 0; }
+.room-title-field { display: grid; gap: 7px; font-weight: 600; font-size: 14px; }
+.management select, .room-title-field input {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
   border: 1px solid var(--line);
   border-radius: 8px;
+  background: var(--card);
+  padding-inline: 11px;
+  font-size: 14px;
+  font-weight: 400;
 }
-.management h3 {
-  margin: 16px 0 7px;
+.settings-actions { justify-content: space-between; flex-wrap: wrap; }
+.settings-actions .manage-save { min-height: 40px; font-size: 14px; }
+.listing-switch { min-height: 40px; font-size: 14px; cursor: pointer; }
+.listing-switch input {
+  appearance: none;
+  background: #717770;
+  border-radius: 12px;
+  width: 32px;
+  height: 19px;
+  margin: 0;
+  padding: 3px;
+  cursor: pointer;
 }
-.management p {
-  font-size: 13px;
-  color: var(--green);
+.listing-switch input::after {
+  content: "";
+  display: block;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: white;
 }
-.management p[role] { margin-top: 12px; }
+.listing-switch input:checked { background: var(--green); }
+.listing-switch input:checked::after { transform: translateX(13px); }
+.permission-section { border-top: 1px solid var(--line); padding-top: 18px; }
+.permission-section h3 { font-size: 16px; margin-bottom: 10px; }
+.members-empty { background: var(--paper); border-radius: 8px; padding: 14px; font-size: 14px; color: var(--muted); }
+.management .grants { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px 12px; margin: 10px 0; }
+.grants .option { background: var(--paper); border-radius: 6px; min-height: 36px; padding: 6px 10px; cursor: pointer; }
+.management p[role] { margin-top: 10px; font-size: 13px; color: var(--green); }
 .management p.management-error { color: #8e3528; }
-.management select { max-width: 100%; }
-.manage-form {
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 10px;
-}
-.manage-form label:first-child {
-  display: grid;
-  gap: 4px;
-  font-size: 13px;
-}
-.manage-form input:not([type="checkbox"]),
-.management select {
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 7px 10px;
-}
 .manage-save {
   background: var(--green);
   color: white;
   padding: 7px 13px;
   border-radius: 6px;
-}
-.grants {
-  flex-wrap: wrap;
-  gap: 12px 18px;
-  margin: 12px 0;
 }
 .pick:has(input:disabled),
 .transport button:disabled,

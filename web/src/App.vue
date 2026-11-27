@@ -622,6 +622,27 @@ function control(p: Partial<State>) {
     }),
   );
 }
+const controlsVisible = ref(false);
+let controlsTimer = 0;
+function revealControls() {
+  clearTimeout(controlsTimer);
+  controlsVisible.value = !!state.value.asset || wide.value;
+  if (controlsVisible.value)
+    controlsTimer = window.setTimeout(
+      () => (controlsVisible.value = false),
+      3000,
+    );
+}
+watch(() => state.value.asset, revealControls);
+function clickPicture(event: MouseEvent) {
+  const firstTap =
+    !controlsVisible.value &&
+    ("pointerType" in event
+      ? event.pointerType === "touch"
+      : matchMedia("(pointer: coarse)").matches);
+  revealControls();
+  if (!firstTap) toggle();
+}
 function toggle() {
   if (!connected.value || !state.value.asset || pendingToggle.value !== null)
     return;
@@ -803,6 +824,7 @@ onMounted(() => {
   }, 500);
 });
 onUnmounted(() => {
+  clearTimeout(controlsTimer);
   clearInterval(tick);
   leave();
 });
@@ -884,13 +906,20 @@ onUnmounted(() => {
     />
     <div class="layout">
       <section class="screen-column" aria-label="放映区">
-        <div ref="stage" class="player" :class="{ wide }">
+        <div
+          ref="stage"
+          class="player"
+          :class="{ wide }"
+          @pointermove="$event.pointerType !== 'touch' && revealControls()"
+          @focusin="revealControls"
+          @keydown="revealControls"
+        >
           <div class="stage">
             <video
               ref="video"
               playsinline
               preload="auto"
-              @click="toggle"
+              @click="clickPicture"
               @playing="
                 playbackStarted();
                 reportPlayback();
@@ -949,7 +978,15 @@ onUnmounted(() => {
               {{ c.text }}
             </div>
           </div>
-          <div class="controls">
+          <div
+            v-if="state.asset || wide"
+            class="controls"
+            :class="{ 'controls-visible': controlsVisible }"
+            @pointerdown="revealControls"
+            @pointerup="revealControls"
+            @input="revealControls"
+            @change="revealControls"
+          >
             <input
               aria-label="播放进度"
               type="range"
