@@ -88,7 +88,7 @@ function putPart(
 export async function upload(
   file: File,
   member: Member,
-  progress: (phase: UploadPhase, bytes: number) => void,
+  progress: (phase: UploadPhase, bytes: number, transferred?: number) => void,
   signal: AbortSignal,
 ) {
   const key = [
@@ -119,7 +119,7 @@ export async function upload(
   // If completion succeeded before the response was lost, retrying it is safe.
   let parts: { PartNumber: number }[];
   try {
-    parts = await api(path + "parts", member, {}, signal);
+    parts = saved ? await api(path + "parts", member, {}, signal) : [];
   } catch (err) {
     signal.throwIfAborted();
     try {
@@ -132,24 +132,70 @@ export async function upload(
     }
   }
   const done = new Set(parts.map((p) => p.PartNumber));
-  for (let start = 0, i = 1; start < file.size; start += job.partSize, i++) {
-    const chunk = file.slice(start, start + job.partSize);
-    signal.throwIfAborted();
-    const checksum = await digest(await chunk.arrayBuffer());
-    if (!done.has(i) || job.hashes?.[i] !== checksum) {
-      const { url, headers } = await api<{
-        url: string;
-        headers?: Record<string, string>;
-      }>(path + "part", member, { number: i }, signal);
-      progress("正在上传", start);
-      await putPart(url, headers, chunk, signal, (bytes) =>
-        progress("正在上传", start + bytes),
-      );
-      (job.hashes ??= {})[i] = checksum;
-      localStorage.setItem(key, JSON.stringify(job));
-    }
-    progress("正在上传", start + chunk.size);
+  const count = Math.ceil(file.size / job.partSize);
+  const sent = new Array<number>(count).fill(0);
+  let total = 0;
+  let transferred = 0;
+  function report(number: number, bytes: number, resumed = false) {
+    const delta = bytes - sent[number - 1];
+    total += delta;
+    if (!resumed) transferred += delta;
+    sent[number - 1] = bytes;
+    progress("正在上传", total, transferred);
   }
+
+  const batch = new AbortController();
+  const stop = () => batch.abort();
+  signal.throwIfAborted();
+  signal.addEventListener("abort", stop, { once: true });
+  let next = 1;
+  async function send(number: number, chunk: Blob) {
+    const { url, headers } = await api<{
+      url: string;
+      headers?: Record<string, string>;
+    }>(path + "part", member, { number }, batch.signal);
+    await putPart(url, headers, chunk, batch.signal, (bytes) =>
+      report(number, bytes),
+    );
+  }
+  async function worker() {
+    while (next <= count) {
+      batch.signal.throwIfAborted();
+      const number = next++;
+      const start = (number - 1) * job.partSize;
+      const chunk = file.slice(start, start + job.partSize);
+      const hash = chunk.arrayBuffer().then(digest);
+      const hashes = (job.hashes ??= {});
+      const previous = hashes[number];
+      if (done.has(number) && previous) {
+        const matches = (await hash) === previous;
+        batch.signal.throwIfAborted();
+        if (matches) {
+          report(number, chunk.size, true);
+          continue;
+        }
+      }
+      if (previous) {
+        delete hashes[number];
+        localStorage.setItem(key, JSON.stringify(job));
+      }
+      const [checksum] = await Promise.all([hash, send(number, chunk)]);
+      hashes[number] = checksum;
+      localStorage.setItem(key, JSON.stringify(job));
+      report(number, chunk.size);
+    }
+  }
+  const workers = Array.from({ length: Math.min(3, count) }, worker);
+  try {
+    await Promise.all(workers);
+  } catch (err) {
+    stop();
+    await Promise.allSettled(workers);
+    throw err;
+  } finally {
+    signal.removeEventListener("abort", stop);
+  }
+  signal.throwIfAborted();
   progress("正在校验", file.size);
   await api(path + "complete", member, {}, signal);
   localStorage.removeItem(key);

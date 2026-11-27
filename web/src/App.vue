@@ -66,6 +66,7 @@ type Transfer = {
   name: string;
   size: number;
   sent: number;
+  bytesPerSecond?: number;
   phase: UploadPhase | "上传完成" | "上传失败";
   error?: string;
 };
@@ -679,14 +680,18 @@ async function select(e: Event) {
     phase: "准备上传",
   };
   const current = transfer.value;
+  const startedAt = performance.now();
   try {
     if (!file.size) throw Error("文件为空，请选择一个视频文件");
     const id = await upload(
       file,
       member.value,
-      (phase, bytes) => {
+      (phase, bytes, transferred) => {
         current.phase = phase;
         current.sent = bytes;
+        const seconds = (performance.now() - startedAt) / 1000;
+        if (transferred && seconds >= 1)
+          current.bytesPerSecond = Math.round(transferred / seconds);
       },
       controller.signal,
     );
@@ -1162,7 +1167,10 @@ onUnmounted(() => {
           </div>
           <small
             >{{ sizeLabel(transfer.sent) }} /
-            {{ sizeLabel(transfer.size) }}</small
+            {{ sizeLabel(transfer.size) }}
+            <span v-if="transfer.bytesPerSecond && transfer.phase === '正在上传'">
+              · 平均 {{ sizeLabel(transfer.bytesPerSecond) }}/s
+            </span></small
           >
           <p v-if="transfer.error" role="alert">{{ transfer.error }}</p>
         </div>
