@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -80,6 +82,9 @@ func (a *app) socialStart(w http.ResponseWriter, r *http.Request, _ identity) er
 		session = hash(bearer(r))
 	}
 	state := token()
+	if p.key == "huawei" {
+		state = "pkce1." + state
+	}
 	_, e = a.db.Exec(r.Context(), "insert into oauth_flows values($1,$2,$3,$4,now()+interval '10 minutes')", hash(state), p.key, input.Challenge, session)
 	if e != nil {
 		return e
@@ -95,7 +100,9 @@ func (a *app) socialStart(w http.ResponseWriter, r *http.Request, _ identity) er
 		q.Set("client_id", p.config("APP_ID"))
 	}
 	if p.key == "huawei" {
-		q.Set("nonce", state)
+		digest, _ := hex.DecodeString(input.Challenge) // validated by hexProof above
+		q.Set("code_challenge", base64.RawURLEncoding.EncodeToString(digest))
+		q.Set("code_challenge_method", "S256")
 	}
 	target := p.authorize + "?" + q.Encode()
 	if p.key == "wechat" {
@@ -107,7 +114,7 @@ func (a *app) socialStart(w http.ResponseWriter, r *http.Request, _ identity) er
 var socialClient = &http.Client{Timeout: 12 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 var huaweiKeys = oidc.NewRemoteKeySet(oidc.ClientContext(context.Background(), socialClient), "https://oauth-login.cloud.huawei.com/oauth2/v3/certs")
 
-func (p platform) subject(c context.Context, code, state string) (string, error) {
+func (p platform) subject(c context.Context, code, proof string) (string, error) {
 	rejected := bad("平台未确认登录，请重新授权")
 	if p.key == "alipay" {
 		client, e := alipay.New(p.config("APP_ID"), p.config("PRIVATE_KEY"), true, alipay.WithHTTPClient(socialClient))
@@ -133,6 +140,7 @@ func (p platform) subject(c context.Context, code, state string) (string, error)
 	var req *http.Request
 	var e error
 	if p.key == "huawei" {
+		q.Set("code_verifier", proof)
 		req, e = http.NewRequestWithContext(c, "POST", p.tokenURL, strings.NewReader(q.Encode()))
 		if e == nil {
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -183,8 +191,8 @@ func (p platform) subject(c context.Context, code, state string) (string, error)
 		if e != nil {
 			return "", bad("华为身份令牌验证失败，请重新登录")
 		}
-		if id.Nonce != state || id.Subject == "" {
-			return "", bad("华为身份令牌与本次登录不匹配，请重新登录")
+		if id.Subject == "" {
+			return "", bad("华为身份令牌缺少用户标识")
 		}
 		return id.Subject, nil
 	}
@@ -224,7 +232,11 @@ func (a *app) socialFinish(w http.ResponseWriter, r *http.Request, _ identity) e
 	if e != nil {
 		return e
 	}
-	subject, e := p.subject(c, in.Code, in.State)
+	// Reject flows started before Huawei began binding each code to the browser's proof.
+	if key == "huawei" && !strings.HasPrefix(in.State, "pkce1.") {
+		return bad("华为登录已更新，请重新登录")
+	}
+	subject, e := p.subject(c, in.Code, in.Verifier)
 	if e != nil {
 		return e
 	}

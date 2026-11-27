@@ -48,7 +48,7 @@ func TestSocialSubject(t *testing.T) {
 		return sig
 	}
 	b64 := base64.RawURLEncoding.EncodeToString
-	const state = "verified-nonce"
+	proof := strings.Repeat("a", 64)
 	socialClient.Transport = exchangeTransport(func(r *http.Request) (*http.Response, error) {
 		var result any
 		switch r.URL.Host {
@@ -70,7 +70,10 @@ func TestSocialSubject(t *testing.T) {
 				if r.ParseForm() != nil || r.Form.Get("code") != "code" {
 					t.Fatal("missing form code")
 				}
-				body := fmt.Sprintf(`{"iss":"https://accounts.huawei.com","aud":"client","sub":"subject","nonce":"%s","exp":%d}`, state, time.Now().Add(time.Minute).Unix())
+				if r.Form.Get("code_verifier") != proof {
+					return &http.Response{StatusCode: 400, Body: io.NopCloser(strings.NewReader(`{"error":"invalid_grant"}`))}, nil
+				}
+				body := fmt.Sprintf(`{"iss":"https://accounts.huawei.com","aud":"client","sub":"subject","exp":%d}`, time.Now().Add(time.Minute).Unix())
 				jwt := b64([]byte(`{"alg":"RS256","kid":"test"}`)) + "." + b64([]byte(body))
 				result = map[string]string{"access_token": "fixture", "id_token": jwt + "." + b64(sign(jwt))}
 			}
@@ -87,13 +90,13 @@ func TestSocialSubject(t *testing.T) {
 			if !p.enabled() {
 				t.Fatal("provider disabled")
 			}
-			got, err := p.subject(context.Background(), "code", state)
+			got, err := p.subject(context.Background(), "code", proof)
 			if err != nil || got != "subject" {
 				t.Fatalf("subject=%q err=%v", got, err)
 			}
 			if p.key == "huawei" {
 				if _, err = p.subject(context.Background(), "code", "different"); err == nil {
-					t.Fatal("wrong nonce accepted")
+					t.Fatal("wrong PKCE verifier accepted")
 				}
 			}
 		})
