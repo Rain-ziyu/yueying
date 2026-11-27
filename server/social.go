@@ -151,6 +151,9 @@ func (p platform) subject(c context.Context, code, state string) (string, error)
 	}
 	resp, e := socialClient.Do(req)
 	if e != nil {
+		if p.key == "huawei" {
+			return "", fault{502, "暂时无法连接华为令牌服务，请稍后重试"}
+		}
 		return "", rejected
 	}
 	defer resp.Body.Close()
@@ -158,15 +161,30 @@ func (p platform) subject(c context.Context, code, state string) (string, error)
 		OpenID  string `json:"openid"`
 		Token   string `json:"access_token"`
 		IDToken string `json:"id_token"`
+		Error   string `json:"error"`
 	}
-	if resp.StatusCode != 200 || json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result) != nil || result.Token == "" {
+	e = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result)
+	if resp.StatusCode != 200 || e != nil || result.Token == "" {
+		if p.key == "huawei" {
+			switch result.Error {
+			case "invalid_client":
+				return "", fault{502, "华为拒绝了月映的应用凭证"}
+			case "invalid_grant":
+				return "", bad("华为未接受本次授权码，请重新登录")
+			default:
+				return "", fault{502, "华为令牌服务未返回有效的访问令牌"}
+			}
+		}
 		return "", rejected
 	}
 	if p.key == "huawei" {
-		verifier := oidc.NewVerifier("https://accounts.huawei.com", huaweiKeys, &oidc.Config{ClientID: p.config("APP_ID"), SupportedSigningAlgs: []string{"RS256"}})
+		verifier := oidc.NewVerifier("https://accounts.huawei.com", huaweiKeys, &oidc.Config{ClientID: p.config("APP_ID"), SupportedSigningAlgs: []string{oidc.RS256, oidc.PS256}})
 		id, e := verifier.Verify(c, result.IDToken)
-		if e != nil || id.Nonce != state || id.Subject == "" {
-			return "", rejected
+		if e != nil {
+			return "", bad("华为身份令牌验证失败，请重新登录")
+		}
+		if id.Nonce != state || id.Subject == "" {
+			return "", bad("华为身份令牌与本次登录不匹配，请重新登录")
 		}
 		return id.Subject, nil
 	}
