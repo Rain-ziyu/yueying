@@ -52,6 +52,11 @@ func TestSocialSubject(t *testing.T) {
 	socialClient.Transport = exchangeTransport(func(r *http.Request) (*http.Response, error) {
 		var result any
 		switch r.URL.Host {
+		case "account.cloud.huawei.com":
+			if r.ParseForm() != nil || r.Form.Get("getNickName") != "1" || r.Form.Get("access_token") != "fixture" {
+				t.Fatal("missing Huawei profile request parameters")
+			}
+			result = map[string]string{"openID": "subject", "displayName": "月下", "headPictureURL": "https://example.test/photo.jpg"}
 		case "api.weixin.qq.com", "graph.qq.com":
 			if r.URL.Query().Get("code") != "code" {
 				t.Fatal("missing code")
@@ -90,12 +95,15 @@ func TestSocialSubject(t *testing.T) {
 			if !p.enabled() {
 				t.Fatal("provider disabled")
 			}
-			got, err := p.subject(context.Background(), "code", proof)
-			if err != nil || got != "subject" {
-				t.Fatalf("subject=%q err=%v", got, err)
+			got, err := p.identify(context.Background(), "code", proof)
+			if err != nil || got.Subject != "subject" {
+				t.Fatalf("subject=%q err=%v", got.Subject, err)
 			}
 			if p.key == "huawei" {
-				if _, err = p.subject(context.Background(), "code", "different"); err == nil {
+				if got.Name != "月下" || got.Avatar != "https://example.test/photo.jpg" || !strings.Contains(p.scope, "profile") {
+					t.Fatal("missing Huawei profile")
+				}
+				if _, err = p.identify(context.Background(), "code", "different"); err == nil {
 					t.Fatal("wrong PKCE verifier accepted")
 				}
 			}

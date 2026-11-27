@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS accounts (
 CREATE TABLE IF NOT EXISTS account_sessions (
  token text PRIMARY KEY, account_id uuid NOT NULL REFERENCES accounts(id), expires_at timestamptz NOT NULL
 );
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS avatar_url text NOT NULL DEFAULT '';
+ALTER TABLE account_sessions ADD COLUMN IF NOT EXISTS provider text;
 CREATE TABLE IF NOT EXISTS social_identities (
  provider text NOT NULL, app_id text NOT NULL, subject text NOT NULL, account_id uuid NOT NULL REFERENCES accounts(id),
  PRIMARY KEY(provider,app_id,subject), UNIQUE(account_id,provider,app_id)

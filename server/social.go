@@ -25,7 +25,7 @@ var platforms = []platform{
 	{"wechat", "微信", "https://open.weixin.qq.com/connect/qrconnect", "https://api.weixin.qq.com/sns/oauth2/access_token", "snsapi_login"},
 	{"qq", "QQ", "https://graph.qq.com/oauth2.0/authorize", "https://graph.qq.com/oauth2.0/token", "get_user_info"},
 	{"alipay", "支付宝", "https://openauth.alipay.com/oauth2/publicAppAuthorize.htm", "", "auth_base"},
-	{"huawei", "华为账号", "https://oauth-login.cloud.huawei.com/oauth2/v3/authorize", "https://oauth-login.cloud.huawei.com/oauth2/v3/token", "openid"},
+	{"huawei", "华为账号", "https://oauth-login.cloud.huawei.com/oauth2/v3/authorize", "https://oauth-login.cloud.huawei.com/oauth2/v3/token", "openid profile"},
 }
 
 func (p platform) config(key string) string { return os.Getenv(strings.ToUpper(p.key) + "_" + key) }
@@ -114,27 +114,57 @@ func (a *app) socialStart(w http.ResponseWriter, r *http.Request, _ identity) er
 var socialClient = &http.Client{Timeout: 12 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 var huaweiKeys = oidc.NewRemoteKeySet(oidc.ClientContext(context.Background(), socialClient), "https://oauth-login.cloud.huawei.com/oauth2/v3/certs")
 
-func (p platform) subject(c context.Context, code, proof string) (string, error) {
+type identityProfile struct {
+	Subject string
+	Name    string
+	Avatar  string
+}
+
+func huaweiProfile(c context.Context, subject, accessToken string) identityProfile {
+	profile := identityProfile{Subject: subject}
+	form := url.Values{"access_token": {accessToken}, "getNickName": {"1"}}
+	req, err := http.NewRequestWithContext(c, http.MethodPost, "https://account.cloud.huawei.com/rest.php?nsp_svc=GOpen.User.getInfo", strings.NewReader(form.Encode()))
+	if err != nil {
+		return profile
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := socialClient.Do(req)
+	if err != nil {
+		return profile
+	}
+	defer resp.Body.Close()
+	var data struct{ OpenID, UnionID, DisplayName, HeadPictureURL string }
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&data) != nil || (data.OpenID != subject && data.UnionID != subject) {
+		return profile
+	}
+	profile.Name = strings.TrimSpace(data.DisplayName)
+	if u, err := url.Parse(data.HeadPictureURL); err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil {
+		profile.Avatar = u.String()
+	}
+	return profile
+}
+
+func (p platform) identify(c context.Context, code, proof string) (identityProfile, error) {
 	rejected := bad("平台未确认登录，请重新授权")
 	if p.key == "alipay" {
 		client, e := alipay.New(p.config("APP_ID"), p.config("PRIVATE_KEY"), true, alipay.WithHTTPClient(socialClient))
 		if e != nil {
-			return "", e
+			return identityProfile{}, e
 		}
 		if e = client.LoadAliPayPublicKey(p.config("PUBLIC_KEY")); e != nil {
-			return "", e
+			return identityProfile{}, e
 		}
 		result, e := client.SystemOauthToken(c, alipay.SystemOauthToken{GrantType: "authorization_code", Code: code})
 		if e != nil || result == nil || result.AccessToken == "" {
-			return "", rejected
+			return identityProfile{}, rejected
 		}
 		if result.OpenId != "" {
-			return result.OpenId, nil
+			return identityProfile{Subject: result.OpenId}, nil
 		}
 		if result.UserId != "" {
-			return result.UserId, nil
+			return identityProfile{Subject: result.UserId}, nil
 		}
-		return "", rejected
+		return identityProfile{}, rejected
 	}
 	q := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "client_id": {p.config("APP_ID")}, "client_secret": {p.config("APP_SECRET")}, "redirect_uri": {os.Getenv("LOGIN_CALLBACK_URL")}}
 	var req *http.Request
@@ -155,14 +185,14 @@ func (p platform) subject(c context.Context, code, proof string) (string, error)
 		req, e = http.NewRequestWithContext(c, "GET", p.tokenURL+"?"+q.Encode(), nil)
 	}
 	if e != nil {
-		return "", rejected
+		return identityProfile{}, rejected
 	}
 	resp, e := socialClient.Do(req)
 	if e != nil {
 		if p.key == "huawei" {
-			return "", fault{502, "暂时无法连接华为令牌服务，请稍后重试"}
+			return identityProfile{}, fault{502, "暂时无法连接华为令牌服务，请稍后重试"}
 		}
-		return "", rejected
+		return identityProfile{}, rejected
 	}
 	defer resp.Body.Close()
 	var result struct {
@@ -176,30 +206,30 @@ func (p platform) subject(c context.Context, code, proof string) (string, error)
 		if p.key == "huawei" {
 			switch result.Error {
 			case "invalid_client":
-				return "", fault{502, "华为拒绝了月映的应用凭证"}
+				return identityProfile{}, fault{502, "华为拒绝了月映的应用凭证"}
 			case "invalid_grant":
-				return "", bad("华为未接受本次授权码，请重新登录")
+				return identityProfile{}, bad("华为未接受本次授权码，请重新登录")
 			default:
-				return "", fault{502, "华为令牌服务未返回有效的访问令牌"}
+				return identityProfile{}, fault{502, "华为令牌服务未返回有效的访问令牌"}
 			}
 		}
-		return "", rejected
+		return identityProfile{}, rejected
 	}
 	if p.key == "huawei" {
 		verifier := oidc.NewVerifier("https://accounts.huawei.com", huaweiKeys, &oidc.Config{ClientID: p.config("APP_ID"), SupportedSigningAlgs: []string{oidc.RS256, oidc.PS256}})
 		id, e := verifier.Verify(c, result.IDToken)
 		if e != nil {
-			return "", bad("华为身份令牌验证失败，请重新登录")
+			return identityProfile{}, bad("华为身份令牌验证失败，请重新登录")
 		}
 		if id.Subject == "" {
-			return "", bad("华为身份令牌缺少用户标识")
+			return identityProfile{}, bad("华为身份令牌缺少用户标识")
 		}
-		return id.Subject, nil
+		return huaweiProfile(c, id.Subject, result.Token), nil
 	}
 	if result.OpenID == "" {
-		return "", rejected
+		return identityProfile{}, rejected
 	}
-	return result.OpenID, nil
+	return identityProfile{Subject: result.OpenID}, nil
 }
 func (a *app) socialFinish(w http.ResponseWriter, r *http.Request, _ identity) error {
 	var in struct{ State, Code, Verifier string }
@@ -236,7 +266,7 @@ func (a *app) socialFinish(w http.ResponseWriter, r *http.Request, _ identity) e
 	if key == "huawei" && !strings.HasPrefix(in.State, "pkce1.") {
 		return bad("华为登录已更新，请重新登录")
 	}
-	subject, e := p.subject(c, in.Code, in.Verifier)
+	profile, e := p.identify(c, in.Code, in.Verifier)
 	if e != nil {
 		return e
 	}
@@ -245,22 +275,28 @@ func (a *app) socialFinish(w http.ResponseWriter, r *http.Request, _ identity) e
 		return e
 	}
 	defer tx.Rollback(c)
+	subject := profile.Subject
 	appID := p.config("APP_ID")
 	if _, e = tx.Exec(c, "select pg_advisory_xact_lock(hashtextextended($1,0))", key+":"+appID+":"+subject); e != nil {
 		return e
 	}
+	outcome := "signed_in"
 	var previous account
-	e = tx.QueryRow(c, "select a.id::text,a.display_name from social_identities i join accounts a on a.id=i.account_id where provider=$1 and app_id=$2 and subject=$3", key, appID, subject).Scan(&previous.ID, &previous.Name)
+	e = tx.QueryRow(c, "select a.id::text,a.display_name,a.avatar_url from social_identities i join accounts a on a.id=i.account_id where provider=$1 and app_id=$2 and subject=$3", key, appID, subject).Scan(&previous.ID, &previous.Name, &previous.Avatar)
 	if e == nil {
 		if u.ID != "" && u.ID != previous.ID {
-			return fault{409, "该平台身份已绑定另一账号"}
+			return fault{409, "请选择当前月映账号原先使用的平台账号"}
 		}
 		u = previous
+		if session != nil {
+			outcome = "profile_updated"
+		}
 	} else if errors.Is(e, pgx.ErrNoRows) {
-		if u.ID == "" {
-			if e = tx.QueryRow(c, "insert into accounts(display_name) values($1) returning id::text,display_name", p.label+"用户").Scan(&u.ID, &u.Name); e != nil {
-				return e
-			}
+		if session != nil {
+			return fault{409, "此平台账号与当前月映账号不匹配"}
+		}
+		if e = tx.QueryRow(c, "insert into accounts(display_name) values($1) returning id::text,display_name", p.label+"用户").Scan(&u.ID, &u.Name); e != nil {
+			return e
 		}
 		res, e := tx.Exec(c, "insert into social_identities values($1,$2,$3,$4) on conflict do nothing", key, appID, subject, u.ID)
 		if e != nil {
@@ -272,6 +308,13 @@ func (a *app) socialFinish(w http.ResponseWriter, r *http.Request, _ identity) e
 	} else {
 		return e
 	}
+	u.Provider = key
+	if profile.Name != "" || profile.Avatar != "" {
+		e = tx.QueryRow(c, "update accounts set display_name=coalesce(nullif($2,''),display_name),avatar_url=coalesce(nullif($3,''),avatar_url) where id=$1 returning display_name,avatar_url", u.ID, profile.Name, profile.Avatar).Scan(&u.Name, &u.Avatar)
+		if e != nil {
+			return e
+		}
+	}
 	result := login{u, bearer(r)}
 	if session == nil {
 		result, e = newSession(c, tx, u)
@@ -282,5 +325,9 @@ func (a *app) socialFinish(w http.ResponseWriter, r *http.Request, _ identity) e
 	if e = tx.Commit(c); e != nil {
 		return e
 	}
-	return respond(w, result)
+	return respond(w, struct {
+		login
+		ProfileAvailable bool   `json:"profileAvailable"`
+		Outcome          string `json:"outcome"`
+	}{result, profile.Name != "" || profile.Avatar != "", outcome})
 }

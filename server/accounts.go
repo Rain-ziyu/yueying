@@ -13,8 +13,10 @@ import (
 )
 
 type account struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Avatar   string `json:"avatarUrl"`
+	Provider string `json:"provider"`
 }
 type login struct {
 	account
@@ -36,9 +38,27 @@ func (a *app) account(r *http.Request) (account, error) {
 	}
 	return u, err
 }
+
+// Older sessions predate the login-method column. Only infer the method when unambiguous.
+func (a *app) accountProfile(w http.ResponseWriter, r *http.Request, _ identity) error {
+	var u account
+	e := a.db.QueryRow(r.Context(), `select a.id::text,a.display_name,a.avatar_url,
+		coalesce(s.provider, case when a.handle is null then
+			(select case when count(*)=1 then min(i.provider) end from social_identities i where i.account_id=a.id)
+			when not exists(select 1 from social_identities i where i.account_id=a.id) then 'password' end, '')
+		from account_sessions s join accounts a on a.id=s.account_id where s.token=$1 and s.expires_at>now()`, hash(bearer(r))).Scan(&u.ID, &u.Name, &u.Avatar, &u.Provider)
+	if errors.Is(e, pgx.ErrNoRows) {
+		return fault{401, "请重新登录账号"}
+	}
+	if e != nil {
+		return e
+	}
+	return respond(w, u)
+}
+
 func newSession(c context.Context, tx pgx.Tx, u account) (login, error) {
 	t := token()
-	_, e := tx.Exec(c, "insert into account_sessions values($1,$2,now()+interval '30 days')", hash(t), u.ID)
+	_, e := tx.Exec(c, "insert into account_sessions(token,account_id,expires_at,provider) values($1,$2,now()+interval '30 days',$3)", hash(t), u.ID, u.Provider)
 	return login{u, t}, e
 }
 
@@ -108,6 +128,7 @@ func (a *app) password(w http.ResponseWriter, r *http.Request, _ identity) error
 			return fault{401, "账号或密码有误"}
 		}
 	}
+	u.Provider = "password"
 	session, e := newSession(c, tx, u)
 	if e != nil {
 		return e

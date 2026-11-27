@@ -1,7 +1,35 @@
 import { ref } from "vue";
 import { api, endpoint, type Member } from "./api";
 
-type Login = { id: string; name: string; token: string };
+type Profile = {
+  id: string;
+  name: string;
+  avatarUrl?: string;
+  provider?: string;
+};
+type Login = Profile & { token: string };
+const providerNames: Record<string, string> = {
+  huawei: "华为账号",
+  wechat: "微信",
+  qq: "QQ",
+  alipay: "支付宝",
+  password: "账号密码",
+};
+export const providerName = (method?: string) =>
+  providerNames[method || ""] || "月映账号";
+export async function refreshProfile() {
+  const current = readSession();
+  if (!current) return;
+  const profile = await accountApi<Profile>("account/me");
+  if (current.token !== readSession()?.token || current.id !== profile.id)
+    return;
+  if (
+    current.name !== profile.name ||
+    current.avatarUrl !== profile.avatarUrl ||
+    current.provider !== profile.provider
+  )
+    setSession({ ...profile, token: current.token });
+}
 function sessionKey() {
   return "yueying-account:" + endpoint;
 }
@@ -90,6 +118,7 @@ export async function finishSocial() {
   const flow = JSON.parse(sessionStorage.getItem(flowKey()) || "null");
   const code =
     url.searchParams.get("code") || url.searchParams.get("auth_code");
+  const providerError = url.searchParams.get("error");
   for (const k of [
     "code",
     "auth_code",
@@ -106,12 +135,17 @@ export async function finishSocial() {
   if (!flow || flow.state !== state)
     throw Error("请在发起授权的浏览器中完成登录");
   sessionStorage.removeItem(flowKey());
-  if (!code) throw Error("授权已取消，可重新登录");
-  setSession(
-    await accountApi<Login>("account/oauth/finish", {
-      state,
-      code,
-      verifier: flow.verifier,
-    }),
-  );
+  if (providerError === "access_denied" || (!providerError && !code))
+    throw Error("已取消授权，本次操作未完成");
+  if (providerError) throw Error("平台授权失败，请重试");
+  const { id, name, token, avatarUrl, provider, outcome, profileAvailable } =
+    await accountApi<Login & { outcome?: string; profileAvailable?: boolean }>(
+      "account/oauth/finish",
+      { state, code, verifier: flow.verifier },
+    );
+  setSession({ id, name, token, avatarUrl, provider });
+  if (provider === "huawei" && profileAvailable === false)
+    return "已登录月映，华为暂未返回头像和昵称";
+  if (outcome === "profile_updated") return "个人资料已更新";
+  return "已使用" + providerName(provider) + "登录月映";
 }

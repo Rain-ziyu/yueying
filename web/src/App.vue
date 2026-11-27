@@ -816,7 +816,7 @@ onUnmounted(() => {
         <span class="brand-mark" aria-hidden="true"></span><strong>月映</strong>
       </div>
       <span class="mast-label">共同观影</span>
-      <AccountMenu @error="fail" />
+      <AccountMenu />
       <button v-if="member" class="exit" @click="leave">
         <LogOut />离开房间
       </button>

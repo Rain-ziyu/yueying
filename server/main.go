@@ -127,6 +127,7 @@ func (a *app) routes() http.Handler {
 	r.Post("/api/v1/account/guests", a.wrap(false, a.guestCards))
 	r.Get("/api/v1/account/rooms", a.wrap(false, a.myRooms))
 	r.Post("/api/v1/account/claim", a.wrap(false, a.claim))
+	r.Get("/api/v1/account/me", a.wrap(false, a.accountProfile))
 	r.Get("/api/v1/account/providers", a.wrap(false, a.providers))
 	r.Post("/api/v1/account/oauth/start", a.wrap(false, a.socialStart))
 	r.Post("/api/v1/account/oauth/finish", a.wrap(false, a.socialFinish))
