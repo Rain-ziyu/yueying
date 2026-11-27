@@ -21,7 +21,13 @@ export async function refreshProfile() {
   const current = readSession();
   if (!current) return;
   const profile = await accountApi<Profile>("account/me");
-  if (current.token !== readSession()?.token || current.id !== profile.id)
+  const latest = readSession();
+  if (
+    current.token !== latest?.token ||
+    current.id !== profile.id ||
+    current.name !== latest.name ||
+    current.avatarUrl !== latest.avatarUrl
+  )
     return;
   if (
     current.name !== profile.name ||
@@ -29,6 +35,21 @@ export async function refreshProfile() {
     current.provider !== profile.provider
   )
     setSession({ ...profile, token: current.token });
+}
+export async function saveProfile(
+  accountId: string,
+  patch: { name?: string; avatar?: string },
+) {
+  const current = readSession();
+  if (!current || current.id !== accountId)
+    throw Error("登录账号已变更，请重新打开个人资料");
+  const updated = await accountApi<Pick<Profile, "id" | "name" | "avatarUrl">>(
+    "account/me",
+    patch,
+  );
+  if (current.token !== readSession()?.token || updated.id !== accountId)
+    throw Error("登录账号已变更");
+  setSession({ ...current, ...updated });
 }
 function sessionKey() {
   return "yueying-account:" + endpoint;
@@ -138,14 +159,11 @@ export async function finishSocial() {
   if (providerError === "access_denied" || (!providerError && !code))
     throw Error("已取消授权，本次操作未完成");
   if (providerError) throw Error("平台授权失败，请重试");
-  const { id, name, token, avatarUrl, provider, outcome, profileAvailable } =
-    await accountApi<Login & { outcome?: string; profileAvailable?: boolean }>(
-      "account/oauth/finish",
-      { state, code, verifier: flow.verifier },
-    );
-  setSession({ id, name, token, avatarUrl, provider });
-  if (provider === "huawei" && profileAvailable === false)
-    return "已登录月映，华为暂未返回头像和昵称";
-  if (outcome === "profile_updated") return "个人资料已更新";
-  return "已使用" + providerName(provider) + "登录月映";
+  const login = await accountApi<Login>("account/oauth/finish", {
+    state,
+    code,
+    verifier: flow.verifier,
+  });
+  setSession(login);
+  return "已使用" + providerName(login.provider) + "登录月映";
 }

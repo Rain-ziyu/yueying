@@ -118,7 +118,7 @@ func (a *app) password(w http.ResponseWriter, r *http.Request, _ identity) error
 		}
 	} else {
 		var digest []byte
-		e = tx.QueryRow(c, "select id::text,display_name,password_hash from accounts where handle=$1", p.Handle).Scan(&u.ID, &u.Name, &digest)
+		e = tx.QueryRow(c, "select id::text,display_name,avatar_url,password_hash from accounts where handle=$1", p.Handle).Scan(&u.ID, &u.Name, &u.Avatar, &digest)
 		if errors.Is(e, pgx.ErrNoRows) {
 			digest = dummyPassword
 		} else if e != nil {

@@ -1205,6 +1205,16 @@ progress::-moz-progress-bar {
 }
 .profile-avatar.large { width: 52px; height: 52px; font-size: 22px; }
 .profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.profile-editor { margin: 14px 0 0; }
+.profile-editor input[type=file] { font-size: 12px; }
+.profile-editor input[type=file]::file-selector-button {
+  border: 0;
+  border-radius: 4px;
+  padding: 5px 8px;
+  margin-right: 8px;
+  background: #edf3ee;
+  color: #305342;
+}
 .profile-card { flex-wrap: wrap; overflow-wrap: anywhere; margin: 16px 0 10px; }
 .profile-card > div { flex: 1; min-width: 0; }
 .profile-card dl { width: 100%; padding: 12px 0; margin: 0; border-block: 1px solid var(--line); }
@@ -1245,6 +1255,8 @@ progress::-moz-progress-bar {
     position: fixed;
     top: 58px;
     right: 12px;
+    max-height: calc(100dvh - 70px);
+    overflow-y: auto;
   }
 }
 .controls input::-webkit-slider-runnable-track {

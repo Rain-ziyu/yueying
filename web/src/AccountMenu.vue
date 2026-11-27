@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from "vue";
+import ProfileEditor from "./ProfileEditor.vue";
 import {
   providerName,
   refreshProfile,
@@ -37,6 +38,17 @@ watch([open, session, retry], async ([visible], _, onCleanup) => {
   }
 });
 const brokenAvatar = ref("");
+const editing = ref(false);
+watch(
+  () => session.value?.id,
+  () => {
+    editing.value = false;
+  },
+);
+function profileSaved() {
+  editing.value = false;
+  notice.value = { kind: "success", text: "个人资料已保存" };
+}
 watch(
   () => session.value?.avatarUrl,
   () => {
@@ -53,6 +65,7 @@ async function loadProfile() {
 }
 function toggle() {
   open.value = !open.value;
+  editing.value = false;
   if (!busy.value) notice.value = undefined;
   if (open.value && session.value) void loadProfile();
 }
@@ -114,7 +127,15 @@ onMounted(() => {
       >
         {{ notice.text }}
       </p>
-      <div v-if="session" class="profile-card">
+      <ProfileEditor
+        v-if="session && editing"
+        :key="session.id"
+        :account="session"
+        @busy="busy = $event"
+        @cancel="editing = false"
+        @saved="profileSaved"
+      />
+      <div v-else-if="session" class="profile-card">
         <span class="profile-avatar large" aria-hidden="true">
           <img
             v-if="session.avatarUrl && brokenAvatar !== session.avatarUrl"
@@ -128,20 +149,23 @@ onMounted(() => {
         <div>
           <strong>{{ session.name }}</strong>
           <p>{{ providerName(session.provider) }}登录</p>
-          <p v-if="session.provider === 'huawei' && !session.avatarUrl">暂无华为头像，已使用昵称首字</p>
-          <p v-else-if="session.avatarUrl && brokenAvatar === session.avatarUrl">头像图片加载失败，已使用昵称首字</p>
+          <p v-if="session.avatarUrl && brokenAvatar === session.avatarUrl">
+            头像图片加载失败，已使用昵称首字
+          </p>
         </div>
         <dl>
           <dt>月映账号 ID</dt>
           <dd>{{ session.id }}</dd>
         </dl>
         <button
-          v-if="session.provider === 'huawei'"
           type="button"
           :disabled="busy"
-          @click="run(() => startSocial('huawei'))"
+          @click="
+            editing = true;
+            notice = undefined;
+          "
         >
-          从华为更新头像和昵称
+          编辑个人资料
         </button>
       </div>
       <form
@@ -202,7 +226,7 @@ onMounted(() => {
         </div>
       </template>
       <button
-        v-if="session"
+        v-if="session && !editing"
         :disabled="busy"
         @click="run(signOut, '已退出月映账号')"
       >

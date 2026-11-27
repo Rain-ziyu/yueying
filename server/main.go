@@ -64,7 +64,11 @@ func body(r *http.Request, v any) error {
 func (a *app) wrap(auth bool, h handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		r.Body = http.MaxBytesReader(w, r.Body, 16384)
+		limit := int64(16384)
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/account/me" {
+			limit = 128 << 10 // JSON containing a browser-resized avatar.
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		var u identity
 		var e error
 		if auth {
@@ -127,6 +131,7 @@ func (a *app) routes() http.Handler {
 	r.Post("/api/v1/account/guests", a.wrap(false, a.guestCards))
 	r.Get("/api/v1/account/rooms", a.wrap(false, a.myRooms))
 	r.Post("/api/v1/account/claim", a.wrap(false, a.claim))
+	r.Post("/api/v1/account/me", a.wrap(false, a.editProfile))
 	r.Get("/api/v1/account/me", a.wrap(false, a.accountProfile))
 	r.Get("/api/v1/account/providers", a.wrap(false, a.providers))
 	r.Post("/api/v1/account/oauth/start", a.wrap(false, a.socialStart))

@@ -115,9 +115,10 @@ var socialClient = &http.Client{Timeout: 12 * time.Second, CheckRedirect: func(*
 var huaweiKeys = oidc.NewRemoteKeySet(oidc.ClientContext(context.Background(), socialClient), "https://oauth-login.cloud.huawei.com/oauth2/v3/certs")
 
 type identityProfile struct {
-	Subject string
-	Name    string
-	Avatar  string
+	Subject     string
+	accessToken string
+	Name        string
+	Avatar      string
 }
 
 func huaweiProfile(c context.Context, subject, accessToken string) identityProfile {
@@ -224,7 +225,7 @@ func (p platform) identify(c context.Context, code, proof string) (identityProfi
 		if id.Subject == "" {
 			return identityProfile{}, bad("华为身份令牌缺少用户标识")
 		}
-		return huaweiProfile(c, id.Subject, result.Token), nil
+		return identityProfile{Subject: id.Subject, accessToken: result.Token}, nil
 	}
 	if result.OpenID == "" {
 		return identityProfile{}, rejected
@@ -270,6 +271,18 @@ func (a *app) socialFinish(w http.ResponseWriter, r *http.Request, _ identity) e
 	if e != nil {
 		return e
 	}
+	// Profile access is needed only for registration. Keep provider HTTP calls outside the transaction.
+	if key == "huawei" && session == nil {
+		var existing bool
+		e = a.db.QueryRow(c, "select exists(select 1 from social_identities where provider=$1 and app_id=$2 and subject=$3)", key, p.config("APP_ID"), profile.Subject).Scan(&existing)
+		if e != nil {
+			return e
+		}
+		if !existing {
+			profile = huaweiProfile(c, profile.Subject, profile.accessToken)
+			profile.Avatar = importHuaweiAvatar(c, profile.Avatar)
+		}
+	}
 	tx, e := a.db.Begin(c)
 	if e != nil {
 		return e
@@ -280,7 +293,6 @@ func (a *app) socialFinish(w http.ResponseWriter, r *http.Request, _ identity) e
 	if _, e = tx.Exec(c, "select pg_advisory_xact_lock(hashtextextended($1,0))", key+":"+appID+":"+subject); e != nil {
 		return e
 	}
-	outcome := "signed_in"
 	var previous account
 	e = tx.QueryRow(c, "select a.id::text,a.display_name,a.avatar_url from social_identities i join accounts a on a.id=i.account_id where provider=$1 and app_id=$2 and subject=$3", key, appID, subject).Scan(&previous.ID, &previous.Name, &previous.Avatar)
 	if e == nil {
@@ -288,14 +300,18 @@ func (a *app) socialFinish(w http.ResponseWriter, r *http.Request, _ identity) e
 			return fault{409, "请选择当前月映账号原先使用的平台账号"}
 		}
 		u = previous
-		if session != nil {
-			outcome = "profile_updated"
-		}
 	} else if errors.Is(e, pgx.ErrNoRows) {
 		if session != nil {
 			return fault{409, "此平台账号与当前月映账号不匹配"}
 		}
-		if e = tx.QueryRow(c, "insert into accounts(display_name) values($1) returning id::text,display_name", p.label+"用户").Scan(&u.ID, &u.Name); e != nil {
+		name := strings.TrimSpace(profile.Name)
+		if name == "" {
+			name = p.label + "用户"
+		}
+		if chars := []rune(name); len(chars) > 40 {
+			name = string(chars[:40])
+		}
+		if e = tx.QueryRow(c, "insert into accounts(display_name,avatar_url) values($1,$2) returning id::text,display_name,avatar_url", name, profile.Avatar).Scan(&u.ID, &u.Name, &u.Avatar); e != nil {
 			return e
 		}
 		res, e := tx.Exec(c, "insert into social_identities values($1,$2,$3,$4) on conflict do nothing", key, appID, subject, u.ID)
@@ -309,12 +325,6 @@ func (a *app) socialFinish(w http.ResponseWriter, r *http.Request, _ identity) e
 		return e
 	}
 	u.Provider = key
-	if profile.Name != "" || profile.Avatar != "" {
-		e = tx.QueryRow(c, "update accounts set display_name=coalesce(nullif($2,''),display_name),avatar_url=$3 where id=$1 returning display_name,avatar_url", u.ID, profile.Name, profile.Avatar).Scan(&u.Name, &u.Avatar)
-		if e != nil {
-			return e
-		}
-	}
 	result := login{u, bearer(r)}
 	if session == nil {
 		result, e = newSession(c, tx, u)
@@ -325,9 +335,5 @@ func (a *app) socialFinish(w http.ResponseWriter, r *http.Request, _ identity) e
 	if e = tx.Commit(c); e != nil {
 		return e
 	}
-	return respond(w, struct {
-		login
-		ProfileAvailable bool   `json:"profileAvailable"`
-		Outcome          string `json:"outcome"`
-	}{result, profile.Name != "" || profile.Avatar != "", outcome})
+	return respond(w, result)
 }
