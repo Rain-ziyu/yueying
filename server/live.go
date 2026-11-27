@@ -22,6 +22,9 @@ type state struct {
 }
 
 type playbackSample struct {
+	Version  int64   `json:"version"`
+	At       int64   `json:"at"`
+	Rate     float64 `json:"rate"`
 	Asset    string  `json:"asset"`
 	Position float64 `json:"position"`
 	Phase    string  `json:"phase"`
@@ -40,6 +43,7 @@ type peer struct {
 	done       chan struct{}
 	member     participant
 	subscribed bool
+	bufferSync bool
 }
 
 // A slow socket cannot hold up the other players or a room heartbeat.
@@ -69,6 +73,7 @@ type liveRoom struct {
 	sync.Mutex
 	clients map[*peer]bool
 	state   state
+	pending map[*peer]bool
 }
 
 func (lr *liveRoom) roster() []participant {
@@ -109,8 +114,9 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 	ws.SetReadLimit(4096)
 	ws.SetReadDeadline(time.Now().Add(8 * time.Second))
 	var auth struct {
-		Token    string
-		Presence bool
+		Token      string
+		Presence   bool
+		BufferSync bool
 	}
 	if ws.ReadJSON(&auth) != nil {
 		return
@@ -120,7 +126,7 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 	if a.db.QueryRow(c, "select room from members where token=$1", hash(auth.Token)).Scan(&room) != nil {
 		return
 	}
-	p := &peer{subscribed: auth.Presence, ws: ws, out: make(chan any, 32), done: make(chan struct{})}
+	p := &peer{bufferSync: auth.BufferSync, subscribed: auth.Presence, ws: ws, out: make(chan any, 32), done: make(chan struct{})}
 	defer close(p.done)
 	go p.writeLoop()
 	a.mu.Lock()
@@ -145,12 +151,20 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 			p.send(map[string]any{"type": "access", "self": u.access})
 		}
 		lr.presence()
+		if lr.pending != nil && p.bufferSync {
+			lr.pending[p] = true
+			lr.notifyWait()
+		}
 	}
 	lr.Unlock()
 	defer func() {
 		a.mu.Lock()
 		lr.Lock()
 		delete(lr.clients, p)
+		if lr.pending != nil {
+			delete(lr.pending, p)
+			a.checkWait(context.Background(), lr, room, p)
+		}
 		if len(lr.clients) == 0 {
 			delete(a.rooms, room)
 		} else {
@@ -184,6 +198,11 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 		}
 		lr.Lock()
 		switch m.Type {
+		case "ready":
+			if m.State.Version == lr.state.Version && lr.pending[p] {
+				delete(lr.pending, p)
+				a.checkWait(c, lr, room, p)
+			}
 		case "progress":
 			if time.Since(lastSample) >= 300*time.Millisecond {
 				lastSample = time.Now()
@@ -244,6 +263,7 @@ func (a *app) control(c context.Context, lr *liveRoom, room string, p *peer, s s
 		p.send(map[string]string{"type": "error", "message": "房间状态已变化，请重试"})
 		return
 	}
+	lr.pending = nil
 	lr.state = s
 	lr.broadcast(map[string]any{"type": "state", "state": s, "now": time.Now().UnixMilli()})
 }
@@ -305,6 +325,24 @@ func (a *app) command(c context.Context, lr *liveRoom, room string, p *peer, act
 	default:
 		return
 	}
+	resume := s.Playing || (lr.pending != nil && (action == "forward" || action == "back" || action == "rate"))
+	if resume && (action == "forward" || action == "back" || action == "play" || lr.pending != nil) {
+		wait := map[*peer]bool{}
+		for client := range lr.clients {
+			if client.bufferSync {
+				wait[client] = true
+			}
+		}
+		if len(wait) > 0 {
+			s.Playing = false
+			a.control(c, lr, room, p, s)
+			if lr.state.Version == s.Version+1 {
+				lr.pending = wait
+				lr.notifyWait()
+			}
+			return
+		}
+	}
 	s.Position = math.Min(s.Position, 604800)
 	a.control(c, lr, room, p, s)
 }
@@ -314,4 +352,26 @@ func (p *peer) sample(q *playbackSample, asset string) {
 	if q != nil && q.Asset == asset && q.Asset != "" && q.Position >= 0 && q.Position <= 604800 && (q.Phase == "playing" || q.Phase == "paused" || q.Phase == "buffering") {
 		p.member.Playback = q
 	}
+}
+
+func (lr *liveRoom) notifyWait() {
+	names := []string{}
+	for p := range lr.pending {
+		names = append(names, p.member.Name)
+	}
+	sort.Strings(names)
+	lr.broadcast(map[string]any{"type": "bufferWait", "version": lr.state.Version, "names": names})
+}
+func (a *app) checkWait(c context.Context, lr *liveRoom, room string, p *peer) {
+	if len(lr.pending) > 0 {
+		lr.notifyWait()
+		return
+	}
+	if len(lr.clients) == 0 {
+		lr.pending = nil
+		return
+	}
+	s := lr.state
+	s.Playing = true
+	a.control(c, lr, room, p, s)
 }

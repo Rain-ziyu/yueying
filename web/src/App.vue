@@ -118,6 +118,9 @@ type Participant = Access & {
   name: string;
   rtt: number | null;
   playback?: {
+    version?: number;
+    at?: number;
+    rate?: number;
     asset: string;
     position: number;
     phase: "playing" | "paused" | "buffering";
@@ -130,10 +133,51 @@ const ahead = ref(0),
   showPlay = ref(false);
 let feedbackTimer = 0,
   commandTimer = 0;
+const displayClock = ref(0);
+const pendingNames = ref<string[]>([]);
+let readyVersion = -1;
+const bufferedTrack = ref("");
+function memberProgress(person: Participant) {
+  const own = person.id === info.value?.self.id;
+  const sample = own ? samplePlayback() : person.playback;
+  if (!sample || sample.asset !== state.value.asset) return "等待进度";
+  if (
+    !own &&
+    sample.version !== undefined &&
+    sample.version !== state.value.version
+  )
+    return "等待新进度";
+  const age = sample.at
+    ? Math.max(0, (displayClock.value - sample.at) / 1000)
+    : 0;
+  if (!own && age > 12) return "进度待更新";
+  const phase =
+    sample.phase === "playing"
+      ? "播放中"
+      : sample.phase === "buffering"
+        ? "缓冲中"
+        : "暂停";
+  const estimate =
+    sample.phase === "playing" && sample.at
+      ? Math.min(age, 3) * (sample.rate || 1)
+      : 0;
+  return (
+    timeLabel(
+      own
+        ? position.value
+        : Math.min(duration.value || Infinity, sample.position + estimate),
+    ) +
+    " · " +
+    phase +
+    (own ? "" : estimate ? " · 估算" : " · 上报")
+  );
+}
 const pendingToggle = ref<boolean | null>(null);
 const feedback = computed(() => {
   if (pendingToggle.value !== null)
     return pendingToggle.value ? "正在播放…" : "正在暂停…";
+  if (pendingNames.value.length)
+    return "等待缓冲 · " + pendingNames.value.join("、");
   if (!state.value.playing) return "已暂停";
   if (blocked.value) return "点按播放";
   if (waiting.value) return "缓冲中";
@@ -157,8 +201,44 @@ function bufferAhead(v: HTMLVideoElement, at: number) {
   return 0;
 }
 function measureBuffer() {
-  if (video.value)
-    ahead.value = bufferAhead(video.value, video.value.currentTime);
+  const v = video.value;
+  if (!v) return;
+  ahead.value = bufferAhead(v, v.currentTime);
+  const stops = ["var(--played-color,var(--amber)) 0 var(--played)"];
+  if (Number.isFinite(v.duration) && v.duration > 0) {
+    for (let i = 0; i < v.buffered.length; i++) {
+      const start = (100 * v.buffered.start(i)) / v.duration,
+        end = (100 * v.buffered.end(i)) / v.duration;
+      stops.push(
+        "transparent " + start + "%",
+        "#a6b9ab " + start + "% " + end + "%",
+        "transparent " + end + "%",
+      );
+    }
+  }
+  bufferedTrack.value =
+    "linear-gradient(to right," +
+    stops.join(",") +
+    ",transparent 100%),#565b54";
+  if (
+    pendingNames.value.length &&
+    readyVersion !== state.value.version &&
+    loaded === state.value.asset &&
+    !v.seeking &&
+    v.readyState >= 3 &&
+    Math.abs(v.currentTime - Math.min(state.value.position, v.duration)) <
+      0.25 &&
+    (ahead.value + 0.1 >=
+      Math.min(6 * state.value.rate, v.duration - v.currentTime) ||
+      (v.readyState === 4 && ahead.value >= 1))
+  ) {
+    if (socket?.readyState === WebSocket.OPEN) {
+      readyVersion = state.value.version;
+      socket.send(
+        JSON.stringify({ type: "ready", state: { version: readyVersion } }),
+      );
+    }
+  }
 }
 function beginBuffering() {
   if (!state.value.playing || blocked.value) return;
@@ -191,6 +271,9 @@ function samplePlayback() {
   if (!v || loaded !== state.value.asset || !loaded || v.readyState < 1)
     return null;
   return {
+    version: state.value.version,
+    at: Math.round(performance.timeOrigin + performance.now() + offset),
+    rate: v.playbackRate,
     asset: loaded,
     position: v.currentTime,
     phase: waiting.value ? "buffering" : v.paused ? "paused" : "playing",
@@ -198,13 +281,14 @@ function samplePlayback() {
 }
 let sampleTimer = 0;
 function reportPlayback() {
-  clearTimeout(sampleTimer);
+  if (sampleTimer) return;
   sampleTimer = window.setTimeout(() => {
+    sampleTimer = 0;
     if (socket?.readyState === WebSocket.OPEN)
       socket.send(
         JSON.stringify({ type: "progress", playback: samplePlayback() }),
       );
-  }, 400);
+  }, 950);
 }
 async function reloadInfo() {
   const current = member.value;
@@ -249,7 +333,13 @@ function connect() {
     watchdog = window.setTimeout(() => ws.close(), 25000);
   }
   ws.onopen = () => {
-    ws.send(JSON.stringify({ token: member.value?.token, presence: true }));
+    ws.send(
+      JSON.stringify({
+        token: member.value?.token,
+        presence: true,
+        bufferSync: true,
+      }),
+    );
   };
   ws.onmessage = async (event) => {
     if (socket !== ws) return;
@@ -291,7 +381,15 @@ function connect() {
     }
     if (m.type === "settings") reloadInfo().catch(fail);
     if (m.type === "presence") members.value = m.members;
+    if (m.type === "bufferWait" && m.version === state.value.version) {
+      pendingNames.value = m.names;
+      measureBuffer();
+    }
     if (m.type === "state") {
+      if (m.state.version !== state.value.version || !synced) {
+        pendingNames.value = [];
+        readyVersion = -1;
+      }
       connected.value = true;
       const first = !synced;
       if (first) {
@@ -342,6 +440,7 @@ function connect() {
     clearTimeout(watchdog);
     if (socket !== ws) return;
     connected.value = false;
+    pendingNames.value = [];
     members.value = [];
     resetCommand();
     retry = window.setTimeout(connect, 1800);
@@ -448,7 +547,11 @@ async function align() {
     beginBuffering();
     // A browser can cap preloading while paused. Allow native playback to take over.
     const goal = Math.min(6 * s.rate, Math.max(0, v.duration - v.currentTime));
-    if (ahead.value + 0.1 < goal && now - bufferingSince < 6000) {
+    if (
+      ahead.value + 0.1 < goal &&
+      !(v.readyState === 4 && ahead.value >= 1) &&
+      now - bufferingSince < 6000
+    ) {
       if (!v.paused) v.pause();
       return;
     }
@@ -511,6 +614,10 @@ function toggle() {
   if (state.value.playing && blocked.value && video.value) {
     blocked.value = false;
     startPlayback(video.value);
+    return;
+  }
+  if (pendingNames.value.length) {
+    control({ playing: false });
     return;
   }
   pendingToggle.value = !state.value.playing;
@@ -601,8 +708,12 @@ function leave() {
   duration.value = position.value = 0;
   clearTimeout(retry);
   clearTimeout(sampleTimer);
+  sampleTimer = 0;
   clearTimeout(feedbackTimer);
   resetCommand();
+  pendingNames.value = [];
+  readyVersion = -1;
+  bufferedTrack.value = "";
   members.value = [];
   waiting.value = blocked.value = showPlay.value = false;
   opening = "";
@@ -663,6 +774,7 @@ onMounted(() => {
     if (!code || code === m.invite) enter(m);
   }
   tick = window.setInterval(() => {
+    displayClock.value = performance.timeOrigin + performance.now() + offset;
     if (
       connected.value &&
       video.value &&
@@ -774,6 +886,7 @@ onUnmounted(() => {
               "
               @timeupdate="
                 position = video?.currentTime || 0;
+                reportPlayback();
                 measureBuffer();
               "
               @ended="
@@ -823,6 +936,7 @@ onUnmounted(() => {
               :value="position"
               :disabled="!duration || (!can('forward') && !can('back'))"
               :style="{
+                '--buffer-track': bufferedTrack,
                 '--played': (duration ? (position / duration) * 100 : 0) + '%',
               }"
               @change="
@@ -834,15 +948,23 @@ onUnmounted(() => {
             <div class="transport">
               <button
                 class="play"
-                :aria-label="state.playing && !blocked ? '暂停' : '播放'"
+                :aria-label="
+                  (state.playing || pendingNames.length) && !blocked
+                    ? '暂停'
+                    : '播放'
+                "
                 :disabled="
                   !state.asset ||
                   (!(state.playing && blocked) &&
-                    !can(state.playing ? 'pause' : 'play'))
+                    !can(
+                      state.playing || pendingNames.length ? 'pause' : 'play',
+                    ))
                 "
                 @click="toggle"
               >
-                <Pause v-if="state.playing && !blocked" /><Play v-else />
+                <Pause
+                  v-if="(state.playing || pendingNames.length) && !blocked"
+                /><Play v-else />
               </button>
               <button
                 aria-label="−10秒"
@@ -927,17 +1049,7 @@ onUnmounted(() => {
                     }}{{ info?.self.id === person.id ? " · 我" : "" }}</small
                   >
                 </div>
-                <span>{{
-                  person.playback && person.playback.asset === state.asset
-                    ? timeLabel(person.playback.position) +
-                      " · " +
-                      {
-                        playing: "播放中",
-                        paused: "暂停",
-                        buffering: "缓冲中",
-                      }[person.playback.phase]
-                    : "等待进度"
-                }}</span>
+                <span>{{ memberProgress(person) }}</span>
               </div>
               <div class="member-side">
                 <b>{{ person.rtt == null ? "待测量" : person.rtt + " ms" }}</b>
