@@ -22,6 +22,7 @@ function prefix() {
   return "yueying-room:" + endpoint + ":";
 }
 export function remember(member: Member, info: RoomInfo) {
+  if (member.accountId) return;
   localStorage.setItem(
     prefix() + member.invite,
     JSON.stringify({ member, title: info.title, role: info.self.role }),
@@ -37,11 +38,14 @@ export function saved(invite: string): Saved | undefined {
     }
   }
 }
-export function owned() {
+export function forget(invite: string) {
+  localStorage.removeItem(prefix() + invite);
+}
+export function guestRooms() {
   return Object.keys(localStorage)
     .filter((k) => k.startsWith(prefix()))
     .map((k) => saved(k.slice(prefix().length)))
-    .filter((v): v is Saved => v?.role === "owner");
+    .filter((v): v is Saved => !!v && !v.member.accountId);
 }
 export function roomInfo(m: Member) {
   return api<RoomInfo>("room", m);

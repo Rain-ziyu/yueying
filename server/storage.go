@@ -35,6 +35,7 @@ type destination struct {
 }
 type storage interface {
 	protocolName() string
+	remove(context.Context, string) error
 	begin(context.Context, string) (string, error)
 	part(context.Context, string, string, int) (destination, error)
 	parts(context.Context, string, string) ([]uploadPart, error)
@@ -117,7 +118,11 @@ func (s s3) finish(c context.Context, k, id string, parts []uploadPart) error {
 	return e
 }
 func (s s3) abort(c context.Context, k, id string) error {
-	return s.c.AbortMultipartUpload(c, s.bucket, k, id)
+	err := s.c.AbortMultipartUpload(c, s.bucket, k, id)
+	if minio.ToErrorResponse(err).Code == "NoSuchUpload" {
+		return nil
+	}
+	return err
 }
 func (s s3) size(c context.Context, k string) (int64, error) {
 	v, e := s.c.StatObject(c, s.bucket, k, minio.StatObjectOptions{})
@@ -172,4 +177,8 @@ func verifyLocation(c context.Context, dst storage, k string, n int64, digest st
 		return errors.New("range validation failed")
 	}
 	return nil
+}
+
+func (s s3) remove(c context.Context, key string) error {
+	return s.c.RemoveObject(c, s.bucket, key, minio.RemoveObjectOptions{})
 }

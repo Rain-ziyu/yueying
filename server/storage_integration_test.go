@@ -59,7 +59,9 @@ func TestStorageSwitch(t *testing.T) {
 			body = bytes.NewReader(b)
 		}
 		req, _ := http.NewRequest(m, srv.URL+"/api/v1/"+path, body)
-		req.Header.Set("Authorization", "Bearer "+tok)
+		if tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
 		res, e := http.DefaultClient.Do(req)
 		if e != nil {
 			t.Fatal(e)
@@ -208,4 +210,62 @@ func TestStorageSwitch(t *testing.T) {
 	if e = w2.ReadJSON(&event); e != nil || event.Text != "暂停弹幕" {
 		t.Fatal("chat", e)
 	}
+	// An account claims the pre-existing member and keeps its grants across sessions.
+	user := map[string]string{"handle": "test_" + token()[:12], "password": token()}
+	first := call("account/register", "", user, 200)["token"].(string)
+	call("account/claim", first, map[string]string{"guest": peer}, 200)
+	call("room", peer, nil, 401)
+	second := call("account/login", "", user, 200)["token"].(string)
+	joinData := map[string]any{"invite": room["invite"]}
+	sessionRoom := call("join", second, joinData, 200)["token"].(string)
+	if call("room", sessionRoom, nil, 200)["self"].(map[string]any)["id"] != guestInfo["id"] {
+		t.Fatal("cross-device membership changed")
+	}
+	grant["allow"] = true
+	call("room/permission", owner, grant, 200)
+	if !call("room", sessionRoom, nil, 200)["self"].(map[string]any)["permissions"].(map[string]any)["upload"].(bool) {
+		t.Fatal("account member grant lost")
+	}
+	call("account/logout", second, struct{}{}, 200)
+	call("room", sessionRoom, nil, 401)
+	protected := call("rooms", first, map[string]string{"title": "长期保留"}, 200)
+	_, e = db.Exec(c, "update rooms set last_used=now()-interval '31 days' where id=$1 or id=$2", room["room"], protected["room"])
+	if e != nil {
+		t.Fatal(e)
+	}
+	w1.Close()
+	w2.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		a.mu.Lock()
+		n := len(a.rooms)
+		a.mu.Unlock()
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("peers not disconnected")
+		}
+		time.Sleep(time.Millisecond * 10)
+	}
+	if more, err := a.expireRoom(c); !more || err != nil {
+		t.Fatalf("expire: %v %v", more, err)
+	}
+	call("room", owner, nil, 401)
+	call("room", protected["token"].(string), nil, 200)
+	for {
+		more, err := a.deleteMedia(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !more {
+			break
+		}
+	}
+	for _, dst := range []string{"first", "second"} {
+		if _, err := a.stores[dst].size(c, "rooms/"+room["room"].(string)+"/"+id); err == nil {
+			t.Fatal("retained media copy after expiry", dst)
+		}
+	}
+
 }

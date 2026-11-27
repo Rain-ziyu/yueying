@@ -52,6 +52,9 @@ func (k *kodo) request(c context.Context, key, method, path string, input, resul
 		return e
 	}
 	defer resp.Body.Close()
+	if method == "DELETE" && (resp.StatusCode == 612 || resp.StatusCode == 404) {
+		return nil
+	}
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("Kodo %s returned HTTP %d", method, resp.StatusCode)
 	}

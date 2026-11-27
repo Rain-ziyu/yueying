@@ -18,6 +18,7 @@ export function configureEndpoint(value: string) {
   }
 }
 export type Member = {
+  accountId?: string;
   token: string;
   invite: string;
   room: string;
@@ -25,7 +26,7 @@ export type Member = {
 };
 export async function api<T>(
   path: string,
-  member?: Member | null,
+  member?: Pick<Member, "token"> | null,
   data?: unknown,
   signal?: AbortSignal,
 ): Promise<T> {

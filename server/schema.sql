@@ -27,3 +27,31 @@ ALTER TABLE members ADD COLUMN IF NOT EXISTS permissions jsonb NOT NULL DEFAULT 
 CREATE UNIQUE INDEX IF NOT EXISTS members_public_id ON members(public_id);
 CREATE INDEX IF NOT EXISTS members_room ON members(room);
 CREATE INDEX IF NOT EXISTS rooms_listed ON rooms(invite) WHERE listed;
+
+CREATE TABLE IF NOT EXISTS accounts (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), handle text UNIQUE, password_hash bytea, display_name text NOT NULL
+);
+CREATE TABLE IF NOT EXISTS account_sessions (
+ token text PRIMARY KEY, account_id uuid NOT NULL REFERENCES accounts(id), expires_at timestamptz NOT NULL
+);
+CREATE TABLE IF NOT EXISTS social_identities (
+ provider text NOT NULL, app_id text NOT NULL, subject text NOT NULL, account_id uuid NOT NULL REFERENCES accounts(id),
+ PRIMARY KEY(provider,app_id,subject), UNIQUE(account_id,provider,app_id)
+);
+CREATE TABLE IF NOT EXISTS oauth_flows (
+ state text PRIMARY KEY, provider text NOT NULL, challenge text NOT NULL, session_key text REFERENCES account_sessions(token) ON DELETE CASCADE, expires_at timestamptz NOT NULL
+);
+CREATE TABLE IF NOT EXISTS auth_limits (bucket text PRIMARY KEY, hits int NOT NULL, until_at timestamptz NOT NULL);
+ALTER TABLE members ADD COLUMN IF NOT EXISTS account_id uuid REFERENCES accounts(id);
+CREATE UNIQUE INDEX IF NOT EXISTS member_account_room ON members(room,account_id) WHERE account_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS account_memberships ON members(account_id) WHERE account_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS room_sessions (
+ token text PRIMARY KEY, member_key text NOT NULL REFERENCES members(token) ON DELETE CASCADE,
+ session_key text NOT NULL REFERENCES account_sessions(token) ON DELETE CASCADE, UNIQUE(member_key,session_key)
+);
+ALTER TABLE rooms ADD COLUMN IF NOT EXISTS last_used timestamptz NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS room_activity ON rooms(last_used);
+CREATE TABLE IF NOT EXISTS media_deletions (
+ store text NOT NULL, object_key text NOT NULL, upload_id text NOT NULL DEFAULT '', next_try timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(store,object_key,upload_id)
+);

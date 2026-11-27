@@ -40,6 +40,7 @@ type peer struct {
 	done       chan struct{}
 	member     participant
 	subscribed bool
+	credential string
 }
 
 // A slow socket cannot hold up the other players or a room heartbeat.
@@ -116,11 +117,13 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := r.Context()
-	var room string
-	if a.db.QueryRow(c, "select room from members where token=$1", hash(auth.Token)).Scan(&room) != nil {
+	credential := hash(auth.Token)
+	u := identity{token: credential}
+	if a.identify(c, &u) != nil {
 		return
 	}
-	p := &peer{subscribed: auth.Presence, ws: ws, out: make(chan any, 32), done: make(chan struct{})}
+	room := u.room
+	p := &peer{subscribed: auth.Presence, credential: credential, ws: ws, out: make(chan any, 32), done: make(chan struct{})}
 	defer close(p.done)
 	go p.writeLoop()
 	a.mu.Lock()
@@ -132,7 +135,7 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 	lr.Lock()
 	lr.clients[p] = true
 	a.mu.Unlock()
-	u := identity{token: hash(auth.Token)}
+	u.token = credential
 	e = a.identify(c, &u)
 	if e == nil {
 		p.member.access = u.access
@@ -162,6 +165,10 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 	if e != nil {
 		return
 	}
+	if a.touch(c, room) != nil {
+		return
+	}
+	lastCheck := time.Now()
 	var lastProbe int64
 	var lastSample time.Time
 	for {
@@ -176,6 +183,13 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 		ws.SetReadDeadline(time.Now().Add(150 * time.Second))
 		if ws.ReadJSON(&m) != nil {
 			return
+		}
+		if time.Since(lastCheck) >= sessionCheckInterval {
+			current := identity{token: credential}
+			if a.identify(c, &current) != nil || a.touch(c, room) != nil {
+				return
+			}
+			lastCheck = time.Now()
 		}
 		if m.Type == "ping" {
 			lastProbe = m.Probe
@@ -313,5 +327,19 @@ func (p *peer) sample(q *playbackSample, asset string) {
 	p.member.Playback = nil
 	if q != nil && q.Asset == asset && q.Asset != "" && q.Position >= 0 && q.Position <= 604800 && (q.Phase == "playing" || q.Phase == "paused" || q.Phase == "buffering") {
 		p.member.Playback = q
+	}
+}
+
+func (a *app) disconnectCredential(room, key string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if lr := a.rooms[room]; lr != nil {
+		lr.Lock()
+		defer lr.Unlock()
+		for p := range lr.clients {
+			if p.credential == key {
+				p.ws.Close()
+			}
+		}
 	}
 }

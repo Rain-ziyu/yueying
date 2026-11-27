@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, watch } from "vue";
 import { ArrowRight } from "@lucide/vue";
 import { api, configureEndpoint, endpoint, type Member } from "./api";
-import { owned, saved, remember } from "./rooms";
+import { session, accountApi, accountJoin } from "./account";
+import { guestRooms, saved, remember, forget } from "./rooms";
 const emit = defineEmits<{
   enter: [member: Member, manage?: boolean];
   error: [error: unknown];
@@ -25,7 +26,70 @@ const name = ref(""),
 const configurable = !import.meta.env.VITE_API_URL;
 const publicRooms = ref<{ title: string; invite: string }[]>([]),
   more = ref(false);
-const myRooms = ref(owned());
+type Card = { title: string; invite: string; owner: boolean; name: string };
+const cloud = ref<Card[]>([]),
+  guests = ref<ReturnType<typeof guestRooms>>([]);
+let listVersion = 0;
+async function loadMine() {
+  const version = ++listVersion;
+  cloud.value = [];
+  guests.value = [];
+  busy.value = true;
+  try {
+    const saved = guestRooms();
+    const cards = session.value
+      ? await accountApi<Card[]>("account/rooms")
+      : [];
+    const verified = [] as typeof saved;
+    for (let i = 0; i < saved.length; i += 100) {
+      const batch = saved.slice(i, i + 100);
+      const rows = await api<Card[]>("account/guests", null, {
+        tokens: batch.map((g) => g.member.token),
+      });
+      for (const room of batch) {
+        const card = rows.find((v) => v.invite === room.member.invite);
+        if (card) verified.push({ ...room, title: card.title });
+        else forget(room.member.invite);
+      }
+    }
+    if (version === listVersion) {
+      cloud.value = cards;
+      guests.value = verified.filter(
+        (g) => session.value || g.role === "owner",
+      );
+    }
+  } catch (e) {
+    emit("error", e);
+  } finally {
+    if (version === listVersion) busy.value = false;
+  }
+}
+async function bind(g: ReturnType<typeof guestRooms>[number]) {
+  try {
+    await accountApi("account/claim", { guest: g.member.token });
+    forget(g.member.invite);
+    await loadMine();
+  } catch (e) {
+    emit("error", e);
+  }
+}
+async function openCloud(r: Card) {
+  try {
+    emit("enter", await accountJoin(r.invite, r.name), r.owner);
+  } catch (e) {
+    emit("error", e);
+  }
+}
+watch(session, () => {
+  const restored = new URL(location.href).searchParams.get("room");
+  if (restored && !invite.value) {
+    invite.value = restored;
+    tab.value = "join";
+  }
+  name.value = session.value?.name || "";
+  if (tab.value === "mine") loadMine();
+});
+
 async function browse(append = false) {
   busy.value = true;
   try {
@@ -47,33 +111,38 @@ async function browse(append = false) {
 function switchTab(t: typeof tab.value) {
   tab.value = t;
   if (t === "browse") browse();
-  if (t === "mine") myRooms.value = owned();
+  if (t === "mine") loadMine();
 }
 async function submit() {
   if (busy.value) return;
   busy.value = true;
   try {
     configureEndpoint(serverUrl.value);
-    const existing =
-      tab.value === "join" ? saved(invite.value.trim()) : undefined;
-    const m =
-      existing?.member ??
-      (await api<Member>(tab.value === "create" ? "rooms" : "join", null, {
-        name: name.value.trim(),
-        invite: invite.value.trim(),
-        title: title.value.trim(),
-        listed: listed.value,
-      }));
-    if (!existing)
-      remember(m, {
-        title: title.value.trim() || "观影房间",
-        listed: listed.value,
-        self: {
-          id: "",
-          role: tab.value === "create" ? "owner" : "member",
-          permissions: {},
-        },
-      });
+    const joining = tab.value === "join",
+      code = invite.value.trim();
+    const data = {
+      name: name.value.trim(),
+      invite: code,
+      title: title.value.trim(),
+      listed: listed.value,
+    };
+    let m: Member;
+    if (session.value) {
+      if (joining && saved(code))
+        throw Error("此浏览器已有该房间的访客身份，请先在「我的房间」绑定");
+      m = await accountApi<Member>(joining ? "join" : "rooms", data);
+      m.accountId = session.value.id;
+    } else {
+      m =
+        (joining ? saved(code)?.member : undefined) ??
+        (await api<Member>(joining ? "join" : "rooms", null, data));
+      if (!joining || !saved(code))
+        remember(m, {
+          title: title.value.trim() || "观影房间",
+          listed: listed.value,
+          self: { id: "", role: joining ? "member" : "owner", permissions: {} },
+        });
+    }
     emit("enter", m);
   } catch (e) {
     emit("error", e);
@@ -87,7 +156,7 @@ function pick(code: string) {
   name.value = saved(code)?.member.name || name.value;
 }
 onMounted(() => {
-  name.value = saved(invite.value)?.member.name || "";
+  name.value = session.value?.name || saved(invite.value)?.member.name || "";
 });
 </script>
 <template>
@@ -124,6 +193,9 @@ onMounted(() => {
             maxlength="40"
             placeholder="朋友怎么称呼你"
         /></label>
+        <p v-if="!session && tab === 'create'" class="retention-note">
+          访客房间连续 30 天无人使用后自动清理。登录可长期保留。
+        </p>
         <template v-if="tab === 'create'"
           ><label
             >房间名称<input
@@ -166,18 +238,31 @@ onMounted(() => {
           加载更多
         </button></template
       >
-      <template v-else
-        ><p>这里保存在此浏览器创建的房间。</p>
-        <p v-if="!myRooms.length">还没有创建房间。</p>
+      <template v-else>
+        <p v-if="busy">正在读取云端房间…</p>
+        <p v-else-if="!guests.length && !cloud.length">暂无房间。</p>
         <button
           class="room-row"
-          v-for="r in myRooms"
-          :key="r.member.room"
-          @click="emit('enter', r.member, true)"
+          v-for="r in cloud"
+          :key="r.invite"
+          @click="openCloud(r)"
         >
-          {{ r.title }}<span>进入管理 →</span>
-        </button></template
-      >
+          {{ r.title }}<span>{{ r.owner ? "进入管理" : "重新加入" }} →</span>
+        </button>
+        <p v-if="guests.length">本机访客身份</p>
+        <div v-for="g in guests" :key="g.member.room" class="guest-row">
+          <button
+            class="room-row"
+            @click="emit('enter', g.member, g.role === 'owner')"
+          >
+            {{ g.title
+            }}<span>{{ g.role === "owner" ? "房主" : "成员" }} →</span>
+          </button>
+          <button v-if="session" class="invite-link" @click="bind(g)">
+            绑定到此账号
+          </button>
+        </div>
+      </template>
     </div>
   </section>
 </template>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, nextTick, onMounted, onUnmounted } from "vue";
+import { computed, ref, watch, nextTick, onMounted, onUnmounted } from "vue";
 import {
   Link as LinkIcon,
   Check,
@@ -18,6 +18,9 @@ import {
   Upload as UploadIcon,
 } from "@lucide/vue";
 import { api, endpoint, upload, type Member, type UploadPhase } from "./api";
+import AccountMenu from "./AccountMenu.vue";
+import { session, accountApi, accountJoin } from "./account";
+import { forget } from "./rooms";
 import Lobby from "./Lobby.vue";
 import RoomManagement from "./RoomManagement.vue";
 import {
@@ -213,6 +216,19 @@ async function reloadInfo() {
   if (member.value !== current) return;
   info.value = result;
   remember(current, result);
+}
+watch(session, (current) => {
+  if (member.value?.accountId && member.value.accountId !== current?.id)
+    leave();
+});
+async function bindCurrent() {
+  const m = member.value;
+  if (!m || !session.value) return;
+  await accountApi("account/claim", { guest: m.token });
+  const joined = await accountJoin(m.invite, m.name);
+  forget(m.invite);
+  leave();
+  enter(joined);
 }
 function enter(m: Member, openManagement = false) {
   manage.value = openManagement;
@@ -660,7 +676,11 @@ onMounted(() => {
   if (raw) {
     const m = JSON.parse(raw);
     const code = new URL(location.href).searchParams.get("room");
-    if (!code || code === m.invite) enter(m);
+    if (
+      (!m.accountId || session.value?.id === m.accountId) &&
+      (!code || code === m.invite)
+    )
+      enter(m);
   }
   tick = window.setInterval(() => {
     if (
@@ -684,6 +704,7 @@ onUnmounted(() => {
         <span class="brand-mark" aria-hidden="true"></span><strong>月映</strong>
       </div>
       <span class="mast-label">共同观影</span>
+      <AccountMenu @error="fail" />
       <button v-if="member" class="exit" @click="leave">
         <LogOut />离开房间
       </button>
@@ -698,6 +719,13 @@ onUnmounted(() => {
         ><i></i>{{ connected ? "已连接" : "连接中…" }}</span
       >
       <div class="invite-tools">
+        <button
+          v-if="session && !member.accountId"
+          class="invite-link"
+          @click="bindCurrent().catch(fail)"
+        >
+          绑定当前房间身份
+        </button>
         <button
           class="room-code"
           title="复制房间码"

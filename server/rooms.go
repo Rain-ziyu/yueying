@@ -22,7 +22,8 @@ func forbidden() error { return fault{403, "房主尚未授权此操作"} }
 const roleSQL = "case when r.owner_token=m.token then 'owner' when r.owner_token is null then 'legacy' else 'member' end"
 
 func (a *app) identify(c context.Context, u *identity) error {
-	return a.db.QueryRow(c, "select m.room,m.nickname,m.public_id::text,"+roleSQL+",m.permissions from members m join rooms r on r.id=m.room where m.token=$1", u.token).Scan(&u.room, &u.name, &u.ID, &u.Role, &u.Permissions)
+	return a.db.QueryRow(c, `select m.token,m.room,m.nickname,m.public_id::text,`+roleSQL+`,m.permissions from members m join rooms r on r.id=m.room
+ where (m.token=$1 and m.account_id is null) or m.token=(select rs.member_key from room_sessions rs join account_sessions s on s.token=rs.session_key join members bound on bound.token=rs.member_key and bound.account_id=s.account_id where rs.token=$1 and s.expires_at>now())`, u.token).Scan(&u.token, &u.room, &u.name, &u.ID, &u.Role, &u.Permissions)
 }
 
 type roomCard struct {

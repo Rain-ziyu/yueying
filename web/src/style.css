@@ -1129,3 +1129,76 @@ progress::-moz-progress-bar {
     min-width: 11em;
   }
 }
+.account-menu {
+  position: relative;
+  margin-left: auto;
+}
+.bar .account-menu + .exit {
+  margin-left: 0;
+}
+.account-panel {
+  position: absolute;
+  z-index: 15;
+  right: 0;
+  top: calc(100% + 8px);
+  width: min(310px, 86vw);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px;
+  box-shadow: 0 12px 32px #20262026;
+}
+.account-panel form label {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  margin: 8px 0;
+}
+.account-panel input {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.account-panel button {
+  margin: 4px 6px 4px 0;
+}
+.account-panel h4 {
+  margin-top: 12px;
+  font-size: 13px;
+}
+.providers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+.providers button {
+  border: 1px solid var(--line);
+  padding: 5px;
+  border-radius: 5px;
+}
+.providers small {
+  margin-left: 4px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.account-panel p,
+.retention-note {
+  font-size: 12px;
+  margin: 8px 0;
+  color: var(--muted);
+}
+.guest-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.guest-row > .invite-link {
+  flex-shrink: 0;
+}
+@media (max-width: 540px) {
+  .account-panel {
+    position: fixed;
+    top: 58px;
+    right: 12px;
+  }
+}

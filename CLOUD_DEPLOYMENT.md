@@ -38,3 +38,20 @@ Railway Free 每月包含 1 美元资源用量，额度耗尽会暂停到下一�
 
 - 常见不兼容片源的转码使用 [腾讯云媒体处理](https://cloud.tencent.com/product/mps)、[COS](https://cloud.tencent.com/product/cos) 和独立的转码工作进程。先用兼容 MP4 验收基本链路，启用转码时按 README 配置模板和月度分钟额度。
 - 后续国内存储可以接入 [七牛 Kodo](https://www.qiniu.com/products/kodo)。切换步骤、旧客户端回退与历史片源迁移见仓库 README。
+
+## 账号与房间保留
+
+月映账号可直接注册并用密码登录。登录后的「我的房间」从 PostgreSQL 查询房主和成员身份。同一浏览器里已有的访客身份可在「我的房间」逐个绑定，也可以进房后点击「绑定当前房间身份」。最早版本没有记录创建者的房间只能绑定已有成员身份。
+
+第三方网站登录回调使用部署的 HTTPS 前端首页。将该完整地址登记到平台应用，并在 Railway 后端设置 `LOGIN_CALLBACK_URL`（当前 Web 入口为 `https://rain-ziyu.github.io/yueying/`）。使用平台登记并获准的域名，如启用自有域名，同时更新后端 `ALLOWED_ORIGINS`。各平台可独立启用。
+
+| 登录平台 | 后端环境变量 | 应用管理入口 |
+| --- | --- | --- |
+| 微信网站应用 | `WECHAT_APP_ID`、`WECHAT_APP_SECRET` | [微信开放平台](https://open.weixin.qq.com/) |
+| QQ 网站应用 | `QQ_APP_ID`、`QQ_APP_SECRET`（App Key） | [QQ 互联](https://connect.qq.com/) |
+| 支付宝网页授权 | `ALIPAY_APP_ID`、`ALIPAY_PRIVATE_KEY`（应用私钥）、`ALIPAY_PUBLIC_KEY`（支付宝公钥），采用 RSA2 公钥模式 | [支付宝开放平台](https://open.alipay.com/) |
+| 华为账号网站应用 | `HUAWEI_APP_ID`（OAuth Client ID）、`HUAWEI_APP_SECRET` | [华为开发者联盟](https://developer.huawei.com/consumer/cn/) |
+
+登录月映账号后，通过账号菜单绑定各平台，可让多个登录方式进入同一账号。各平台独立首次登录会创建独立账号。密钥只在 Go 后端配置。发起网页授权和接收回调需在同一浏览器会话；原生安装包的厂商 SDK 登录另行接入。
+
+Go 服务启动时及运行期间每小时检查匿名房间。进入房间、在线心跳及房间操作更新云端活动时间，浏览大厅或查看房间清单不会续期。新增规则时，存量房间从迁移时刻开始计时。连续 30 天无人使用的匿名房间在后续巡检中清理，服务休眠时在下次启动补查。房主已绑定账号的房间长期保留。数据库将片源、迁移副本和未完成上传的回收任务与房间删除一起提交，对象存储暂不可用时自动重试。

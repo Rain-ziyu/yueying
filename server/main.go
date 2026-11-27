@@ -63,14 +63,21 @@ func body(r *http.Request, v any) error {
 }
 func (a *app) wrap(auth bool, h handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		r.Body = http.MaxBytesReader(w, r.Body, 16384)
 		var u identity
 		var e error
 		if auth {
-			u.token = hash(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+			u.token = hash(bearer(r))
 			e = a.identify(r.Context(), &u)
 			if e != nil {
 				http.Error(w, "请重新加入房间", 401)
+				return
+			}
+		}
+		if auth {
+			if e = a.touch(r.Context(), u.room); e != nil {
+				http.Error(w, "房间暂不可用", 503)
 				return
 			}
 		}
@@ -114,6 +121,15 @@ func (a *app) routes() http.Handler {
 		}
 		w.WriteHeader(204)
 	})
+	r.Post("/api/v1/account/register", a.wrap(false, a.password))
+	r.Post("/api/v1/account/login", a.wrap(false, a.password))
+	r.Post("/api/v1/account/logout", a.wrap(false, a.logout))
+	r.Post("/api/v1/account/guests", a.wrap(false, a.guestCards))
+	r.Get("/api/v1/account/rooms", a.wrap(false, a.myRooms))
+	r.Post("/api/v1/account/claim", a.wrap(false, a.claim))
+	r.Get("/api/v1/account/providers", a.wrap(false, a.providers))
+	r.Post("/api/v1/account/oauth/start", a.wrap(false, a.socialStart))
+	r.Post("/api/v1/account/oauth/finish", a.wrap(false, a.socialFinish))
 	r.Get("/api/v1/rooms", a.wrap(false, a.directory))
 	r.Get("/api/v1/room", a.wrap(true, a.roomInfo))
 	r.Post("/api/v1/room/settings", a.wrap(true, a.settings))
@@ -137,6 +153,18 @@ func (a *app) join(w http.ResponseWriter, r *http.Request, _ identity) error {
 	if e := body(r, &p); e != nil {
 		return e
 	}
+	var user account
+	session := bearer(r)
+	if r.Header.Get("Authorization") != "" {
+		var err error
+		user, err = a.account(r)
+		if err != nil {
+			return err
+		}
+		if p.Name == "" {
+			p.Name = user.Name
+		}
+	}
 	if len([]rune(p.Name)) < 1 || len([]rune(p.Name)) > 40 {
 		return bad("请输入 1–40 字昵称")
 	}
@@ -159,7 +187,7 @@ func (a *app) join(w http.ResponseWriter, r *http.Request, _ identity) error {
 		p.Invite = token()[:16]
 		_, e = tx.Exec(c, "insert into rooms(id,invite,title,listed,owner_token)values($1,$2,$3,$4,$5)", id, p.Invite, p.Title, p.Listed, hash(t))
 	} else {
-		e = tx.QueryRow(c, "select id from rooms where invite=$1", p.Invite).Scan(&id)
+		e = tx.QueryRow(c, "update rooms set last_used=now() where invite=$1 returning id", p.Invite).Scan(&id)
 		if e != nil {
 			return bad("房间码无效")
 		}
@@ -167,7 +195,16 @@ func (a *app) join(w http.ResponseWriter, r *http.Request, _ identity) error {
 	if e != nil {
 		return e
 	}
-	_, e = tx.Exec(c, "insert into members(token,room,nickname) values($1,$2,$3)", hash(t), id, p.Name)
+	if user.ID == "" {
+		_, e = tx.Exec(c, "insert into members(token,room,nickname) values($1,$2,$3)", hash(t), id, p.Name)
+	} else {
+		var key string
+		e = tx.QueryRow(c, `insert into members(token,room,nickname,account_id) values($1,$2,$3,$4)
+ on conflict(room,account_id) where account_id is not null do update set account_id=excluded.account_id returning token,nickname`, hash(t), id, p.Name, user.ID).Scan(&key, &p.Name)
+		if e == nil {
+			t, e = roomSession(c, tx, session, key)
+		}
+	}
 	if e != nil {
 		return e
 	}
@@ -257,6 +294,7 @@ func main() {
 		}
 		return
 	}
+	go a.maintain(c)
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
