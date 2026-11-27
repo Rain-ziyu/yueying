@@ -1202,3 +1202,9 @@ progress::-moz-progress-bar {
     right: 12px;
   }
 }
+.controls input::-webkit-slider-runnable-track {
+  background: var(--buffer-track, #565b54);
+}
+.controls input::-moz-range-track {
+  background: var(--buffer-track, #565b54);
+}

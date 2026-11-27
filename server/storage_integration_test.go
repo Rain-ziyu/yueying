@@ -188,7 +188,7 @@ func TestStorageSwitch(t *testing.T) {
 			t.Fatal(e)
 		}
 		w.SetReadDeadline(time.Now().Add(5 * time.Second))
-		w.WriteJSON(map[string]string{"token": tok})
+		w.WriteJSON(map[string]any{"token": tok, "bufferSync": true})
 		if _, _, e = w.ReadMessage(); e != nil {
 			t.Fatal(e)
 		}
@@ -209,6 +209,53 @@ func TestStorageSwitch(t *testing.T) {
 	w1.WriteJSON(map[string]string{"type": "chat", "text": "暂停弹幕"})
 	if e = w2.ReadJSON(&event); e != nil || event.Text != "暂停弹幕" {
 		t.Fatal("chat", e)
+	}
+	read := func(kind string) state {
+		t.Helper()
+		for {
+			if err := w2.ReadJSON(&event); err != nil {
+				t.Fatal(err)
+			}
+			if event.Type == kind {
+				return event.State
+			}
+		}
+	}
+	command := func(action string, version int64, pos float64) {
+		w1.WriteJSON(map[string]any{"type": "command", "action": action, "state": state{Version: version, Position: pos}})
+	}
+	ready := func(w *websocket.Conn, v int64) {
+		w.WriteJSON(map[string]any{"type": "ready", "state": state{Version: v}})
+	}
+	command("play", 1, 8)
+	start := read("state")
+	read("bufferWait")
+	ready(w1, start.Version)
+	read("bufferWait")
+	ready(w2, start.Version)
+	running := read("state")
+	if !running.Playing {
+		t.Fatal("did not resume")
+	}
+	command("seek", running.Version, 55)
+	held := read("state")
+	if held.Playing || held.Position != 55 {
+		t.Fatal("seek did not freeze", held)
+	}
+	read("bufferWait")
+	ready(w1, held.Version)
+	read("bufferWait")
+	ready(w2, start.Version)
+	w2.WriteJSON(map[string]any{"type": "ping"})
+	read("pong")
+	var persisted state
+	if err := db.QueryRow(c, "select state from rooms where id=$1", room["room"]).Scan(&persisted); err != nil || persisted.Playing || persisted.Version != held.Version {
+		t.Fatal("slow member was skipped", persisted, err)
+	}
+	ready(w2, held.Version)
+	resumed := read("state")
+	if !resumed.Playing || resumed.Position != 55 {
+		t.Fatal("resume target", resumed)
 	}
 	// An account claims the pre-existing member and keeps its grants across sessions.
 	user := map[string]string{"handle": "test_" + token()[:12], "password": token()}
