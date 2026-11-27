@@ -310,7 +310,7 @@ func (a *app) socialFinish(w http.ResponseWriter, r *http.Request, _ identity) e
 	}
 	u.Provider = key
 	if profile.Name != "" || profile.Avatar != "" {
-		e = tx.QueryRow(c, "update accounts set display_name=coalesce(nullif($2,''),display_name),avatar_url=coalesce(nullif($3,''),avatar_url) where id=$1 returning display_name,avatar_url", u.ID, profile.Name, profile.Avatar).Scan(&u.Name, &u.Avatar)
+		e = tx.QueryRow(c, "update accounts set display_name=coalesce(nullif($2,''),display_name),avatar_url=$3 where id=$1 returning display_name,avatar_url", u.ID, profile.Name, profile.Avatar).Scan(&u.Name, &u.Avatar)
 		if e != nil {
 			return e
 		}

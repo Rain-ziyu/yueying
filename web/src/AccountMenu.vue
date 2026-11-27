@@ -128,6 +128,8 @@ onMounted(() => {
         <div>
           <strong>{{ session.name }}</strong>
           <p>{{ providerName(session.provider) }}登录</p>
+          <p v-if="session.provider === 'huawei' && !session.avatarUrl">暂无华为头像，已使用昵称首字</p>
+          <p v-else-if="session.avatarUrl && brokenAvatar === session.avatarUrl">头像图片加载失败，已使用昵称首字</p>
         </div>
         <dl>
           <dt>月映账号 ID</dt>
