@@ -2,6 +2,5 @@
 builder = "DOCKERFILE"
 
 [deploy]
-preDeployCommand = ["./yueying sync-client-origins https://rain-ziyu.github.io"]
 startCommand = "./yueying"
 healthcheckPath = "/health"
