@@ -55,7 +55,7 @@ Railway 的服务镜像包含 FFmpeg。其他部署需要把带 libx264 和 AAC 
 | Android | 在 web 运行 npm run android，再在 android 工程运行 gradlew assembleDebug。正式内测渠道使用 Android Studio 配置自己的发布签名。 |
 | iOS | 在 Mac 运行 npm run ios，安装 CocoaPods 依赖，使用 Xcode 打开 App.xcworkspace，选择团队，Archive 后上传 TestFlight。 |
 | HarmonyOS | 在 web 运行 npm run harmony，将 dist 内联资源同步到 ArkWeb rawfile，使用 DevEco Studio 打开 harmony 并 assembleHap。真机安装需要配置本项目的调试签名和设备授权。 |
-| Windows | 安装 Rust 与 Tauri 系统依赖，在 web 执行 npm run desktop -- --bundles nsis，生成 setup.exe。 |
+| Windows | 安装 Rust 与 Tauri 系统依赖，在 web 执行 `npm run windows`，生成当前用户可安装的 setup.exe。 |
 | macOS | 在 Mac 安装两个架构的 Rust target，执行 npm run desktop -- --target universal-apple-darwin --bundles dmg，外部分发使用 Developer ID 签名和公证。 |
 
 ## 验证
