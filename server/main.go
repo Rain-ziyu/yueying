@@ -287,8 +287,12 @@ func main() {
 	if stores[a.primary] == nil {
 		log.Fatal("invalid DEFAULT_STORE")
 	}
-	for _, v := range strings.Split(os.Getenv("ALLOWED_ORIGINS"), ",") {
-		a.origins[strings.TrimSpace(v)] = true
+	for _, key := range []string{"ALLOWED_ORIGINS", "NATIVE_CLIENT_ORIGINS"} {
+		for _, v := range strings.Split(os.Getenv(key), ",") {
+			if origin := strings.TrimSpace(v); origin != "" {
+				a.origins[origin] = true
+			}
+		}
 	}
 	if len(os.Args) == 4 && os.Args[1] == "migrate" {
 		if e = a.migrate(c, os.Args[2], os.Args[3]); e != nil {

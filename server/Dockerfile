@@ -9,5 +9,6 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /yueying .
+ENV NATIVE_CLIENT_ORIGINS=http://tauri.localhost,tauri://localhost,https://localhost,capacitor://localhost,https://yueying.localhost
 USER nobody
 CMD ["./yueying"]
