@@ -291,6 +291,15 @@ func main() {
 	if e != nil {
 		log.Fatal(e)
 	}
+	if target, ok := stores[os.Getenv("DEFAULT_STORE")].(s3); ok && len(os.Args) == 1 &&
+		target.bucket == "expandable-stand-fpvzjthf" && target.c.EndpointURL().Hostname() == "t3.storageapi.dev" {
+		ctx, cancel := context.WithTimeout(c, 30*time.Second)
+		err := syncClientOrigins(ctx, "https://rain-ziyu.github.io")
+		cancel()
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
 	a := &app{db: db, stores: stores, primary: os.Getenv("DEFAULT_STORE"), fallback: os.Getenv("LEGACY_STORE"), origins: map[string]bool{}, rooms: map[string]*liveRoom{}}
 	if stores[a.primary] == nil {
 		log.Fatal("invalid DEFAULT_STORE")
