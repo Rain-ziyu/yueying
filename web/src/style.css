@@ -1,14 +1,14 @@
 :root {
-  color-scheme: light;
-  --paper: #f6f4ef;
-  --card: #fffefa;
-  --ink: #252923;
-  --muted: #61675f;
-  --line: #dcdcd1;
-  --amber: #edb55f;
-  --amber-dark: #79501f;
-  --green: #356853;
-  --night: #151a19;
+  color-scheme: dark;
+  --paper: #10111c;
+  --card: #1b1d2d;
+  --ink: #f4f1fd;
+  --muted: #c0bdce;
+  --line: #414154;
+  --amber: #d5c2ff;
+  --amber-dark: #dbcaff;
+  --green: #d9c6ff;
+  --night: #131421;
   --radius: 14px;
   --sans: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   --display:
@@ -1370,25 +1370,18 @@ progress::-moz-progress-bar {
 .controls input::-moz-range-track {
   background: var(--buffer-track, #565b54);
 }
-
 .prepare-low { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 14px; }
 .prepare-low input { accent-color: var(--green); }
 /* A dark cinema foyer with a low-cost depth transition on pointer devices. */
-body:has(.lobby) {
+body {
   background: radial-gradient(ellipse at 70% 5%, #222238, #0e101b 70%);
   min-height: 100vh;
 }
-body:has(.lobby) .mast { background: #151624; color: #f6f3ff; border-color: #343448; }
-body:has(.lobby) .mast-label { color: #c2bcd3; border-color: #4a485c; }
-body:has(.lobby) .brand-mark { --amber: #d4c1ff; --night: #322d47; }
-body:has(.lobby) .account-panel { color: var(--ink); }
+.mast { background: #151624; color: #f6f3ff; border-color: #343448; }
+.mast-label { color: #c2bcd3; border-color: #4a485c; }
+.brand-mark { --amber: #d4c1ff; --night: #322d47; }
+.account-panel { color: var(--ink); }
 .lobby {
-  --card: #1b1d2d;
-  --ink: #f4f1fd;
-  --line: #414154;
-  --muted: #c0bdce;
-  --green: #d9c6ff;
-  color-scheme: dark;
   color: var(--ink);
   grid-template-columns: minmax(0, 1fr);
   max-width: 1150px;
@@ -1407,7 +1400,7 @@ body:has(.lobby) .account-panel { color: var(--ink); }
 .cinema-panorama {
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg,#0b0d21a6,transparent 80%),url("./lunar-cinema.webp") center 59% / cover;
+  background: linear-gradient(90deg,#0b0d21a6,transparent 80%),var(--cinema-panorama) center 59% / cover;
   z-index: -1;
 }
 @media (hover:hover) and (pointer:fine) and (prefers-reduced-motion:no-preference) {
@@ -1460,4 +1453,72 @@ body:has(.lobby) .account-panel { color: var(--ink); }
   border: 1px solid var(--line);
   border-radius: 7px;
 }
-body:has(.lobby) .account-trigger { background: #302b42; color: #f3eaff; border-color: #514965; }
+.account-trigger { background: #302b42; color: #f3eaff; border-color: #514965; }
+
+/* Shared cinema surfaces and accessible controls across the room and account views. */
+:root {
+  --cinema-panorama: url("./lunar-cinema.webp");
+  --inset-surface: #121521;
+  --accent-surface: #302b42;
+  --accent-border: #615375;
+}
+:focus-visible, .pick:focus-within { outline-color: var(--amber); }
+.exit:hover, .library-head button:hover, .transport button:not(.play):hover {
+  background: var(--accent-surface);
+}
+.room-head h1 { color: var(--ink); }
+.room .invite-link, .room-code { background: #222435; }
+.room .invite-link:hover, .room-code:hover { border-color: var(--accent-border); }
+.room .invite-link[aria-pressed=true] { background: #3e3555; border-color: #aa94ce; }
+.connection.online i { background: #91d6ad; box-shadow: 0 0 0 3px #91d6ad23; }
+.library, .account-panel, .management { box-shadow: 0 12px 36px #06061136; }
+.empty-stage {
+  background: linear-gradient(0deg,#080b19e6 0%,#13132d40 64%),var(--cinema-panorama) center / cover;
+  color: var(--ink);
+}
+.empty-stage .lunar { display:none; }
+.empty-stage p { color: #e7e0f2; }
+.controls { background: linear-gradient(transparent,#10111bef 34%); }
+.transport .play:hover { background: #e5d8ff; }
+.transport select, .chat button, .asset.selected {
+  background: var(--accent-surface);
+  color: var(--ink);
+  border-color: var(--accent-border);
+}
+.room .pick { background: #262439; color: var(--green); border-color: #817196; }
+.room .pick:hover { background: #302b44; }
+.transfer.failed, .transfer.failed p, .management p.management-error { color: #ffb9b2; }
+.copy-feedback, .manage-save { background: var(--amber); color: #211d31; }
+.copy-feedback.failed { background: #602f3a; color: white; }
+.management::backdrop { background: #080916bf; }
+.management select, .room-title-field input, .account-panel input:not([type=file]) {
+  background: var(--inset-surface); border-color: var(--line); color: var(--ink);
+}
+.listing-switch input:checked::after { background: #352743; }
+.account-panel { border-radius: 16px; padding: 20px; }
+.account-panel h3 { margin: 0 0 8px; font-size: 20px; }
+.account-panel h4 { color: var(--muted); }
+.account-panel form > label:not(.avatar-picker) { gap: 6px; margin-block: 12px; }
+.account-panel input:not([type=file]) { min-height: 42px; border-radius: 8px; }
+.account-panel .manage-save, .account-panel .providers button { min-height: 40px; }
+.account-panel .profile-action, .account-panel label.avatar-picker {
+  background: var(--accent-surface); color: var(--ink); border-color: var(--accent-border);
+}
+.profile-avatar { background: #46395c; color: #edddff; }
+.account-panel p.account-notice { background: #302d40; color: #eee4ff; }
+.account-panel p.account-notice.success { background: #203a32; color: #b0e9ce; }
+.account-panel p.account-notice.error { background: #462a36; color: #ffc9cf; }
+@media (pointer:coarse) {
+  .management-head button, .grants .option, .account-panel .profile-action,
+  .account-panel .manage-save, .invite-link, .account-panel label.avatar-picker {
+    min-height: 44px;
+  }
+}
+.brand, .exit, .mast-label { flex-shrink: 0; white-space: nowrap; }
+.account-trigger { min-width: 0; white-space: nowrap; }
+.account-menu { min-width: 0; }
+@media (max-width: 600px) {
+  .bar { gap: 10px; }
+  .bar:has(.exit) .mast-label { display:none; }
+  .bar:has(.exit) .account-trigger { max-width: min(32vw,160px); }
+}

@@ -17,7 +17,7 @@ import {
   Send,
   Upload as UploadIcon,
 } from "@lucide/vue";
-import { api, endpoint, constrainedNetwork, upload, type Member, type UploadPhase } from "./api";
+import { api, endpoint, packaged, constrainedNetwork, upload, type Member, type UploadPhase } from "./api";
 import { useRoomVoice } from "./voice";
 import AccountMenu from "./AccountMenu.vue";
 import { session, accountApi, accountJoin } from "./account";
@@ -27,6 +27,7 @@ import RoomManagement from "./RoomManagement.vue";
 import {
   roomInfo,
   remember,
+  resumableMember,
   type RoomInfo,
   type Access,
   type Ability,
@@ -386,7 +387,7 @@ async function bindCurrent() {
 function enter(m: Member) {
   manage.value = false;
   member.value = m;
-  sessionStorage.setItem("member", JSON.stringify(m));
+  sessionStorage.setItem("member", JSON.stringify({ ...m, service: endpoint }));
   const url = new URL(location.href);
   url.searchParams.set("room", m.invite);
   history.replaceState(null, "", url);
@@ -924,9 +925,7 @@ async function copyInvitation(link: boolean) {
   const current = member.value;
   if (!current) return;
   const url = new URL(
-    import.meta.env.PROD &&
-    (!/^https?:$/.test(location.protocol) ||
-      ["localhost", "tauri.localhost"].includes(location.hostname))
+    import.meta.env.PROD && packaged
       ? "https://rain-ziyu.github.io/yueying/"
       : location.href,
   );
@@ -952,16 +951,8 @@ async function copyInvitation(link: boolean) {
   }
 }
 onMounted(() => {
-  const raw = sessionStorage.getItem("member");
-  if (raw) {
-    const m = JSON.parse(raw);
-    const code = new URL(location.href).searchParams.get("room");
-    if (
-      (!m.accountId || session.value?.id === m.accountId) &&
-      (!code || code === m.invite)
-    )
-      enter(m);
-  }
+  const m = resumableMember(session.value?.id, new URL(location.href).searchParams.get("room"));
+  if (m) enter(m);
   tick = window.setInterval(() => {
     displayClock.value = performance.timeOrigin + performance.now() + offset;
     if (

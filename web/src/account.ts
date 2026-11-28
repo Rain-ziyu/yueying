@@ -75,8 +75,12 @@ export function setSession(value: Login | null) {
 }
 export async function accountApi<T>(path: string, data?: unknown) {
   const current = readSession();
+  const service = endpoint;
   try {
-    return await api<T>(path, current, data);
+    const result = await api<T>(path, current, data);
+    if (service !== endpoint || current?.token !== readSession()?.token)
+      throw Error("服务或账号已切换，请重新操作");
+    return result;
   } catch (e) {
     if (
       e instanceof Error &&
@@ -93,11 +97,9 @@ export async function signIn(
   password: string,
 ) {
   const origin = endpoint;
-  const login = await api<Login>(register ? "account/register" : "account/login", null, {
-      handle,
-      password,
-  });
-  if (origin === endpoint) setSession(login);
+  const login = await api<Login>(register ? "account/register" : "account/login", null, { handle, password });
+  if (origin !== endpoint) throw Error("服务已切换，请重新登录");
+  setSession(login);
 }
 export async function signOut() {
   const current = readSession();

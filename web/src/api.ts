@@ -1,7 +1,12 @@
+export const packaged = ["tauri:", "capacitor:", "resource:", "file:"].includes(location.protocol) ||
+  (!location.port && ["tauri.localhost", "yueying.localhost", "localhost"].includes(location.hostname));
+const defaultService = import.meta.env.PROD && packaged
+  ? "https://generous-clarity-production-f87cb8e4.up.railway.app"
+  : "http://localhost:8080";
 export let endpoint = (
   import.meta.env.VITE_API_URL ||
   localStorage.getItem("api-origin") ||
-  "http://localhost:8080"
+  defaultService
 ).replace(/\/$/, "");
 export function configureEndpoint(value: string) {
   const u = new URL(value);

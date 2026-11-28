@@ -48,6 +48,8 @@ Railway 的服务镜像包含 FFmpeg。其他部署需要把带 libx264 和 AAC 
 
 所有原生包内置 Vite 产物。每次修改后先重新构建并同步，再打对应平台包。内测人员使用同一个后端地址和房间码。
 
+原生内测包默认连接月映的 Railway 服务。「连接设置」可以切换到自托管 HTTPS 服务，构建时指定 `VITE_API_URL` 则使用该固定服务。各原生来源由服务镜像的 `NATIVE_CLIENT_ORIGINS` 配置，网站来源继续使用 `ALLOWED_ORIGINS`。在存储桶的跨域设置中也应允许实际客户端来源，以支持直传及播放。
+
 | 目标 | 构建 |
 | --- | --- |
 | Android | 在 web 运行 npm run android，再在 android 工程运行 gradlew assembleDebug。正式内测渠道使用 Android Studio 配置自己的发布签名。 |

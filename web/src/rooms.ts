@@ -50,3 +50,19 @@ export function guestRooms() {
 export function roomInfo(m: Member) {
   return api<RoomInfo>("room", m);
 }
+
+export function resumableMember(accountId: string | undefined, invite: string | null) {
+  try {
+    const snapshot = JSON.parse(sessionStorage.getItem("member") || "null") as
+      (Member & { service?: string }) | null;
+    if (!snapshot?.room || !snapshot.token || !snapshot.invite ||
+        (invite && snapshot.invite !== invite) ||
+        (snapshot.accountId && snapshot.accountId !== accountId)) return;
+    if (snapshot.service === endpoint) return snapshot;
+    // Older guest sessions have a second, service-scoped copy in the room list.
+    if (!snapshot.service && !snapshot.accountId &&
+        saved(snapshot.invite)?.member.token === snapshot.token) return snapshot;
+  } catch {
+    // A damaged snapshot can be replaced by joining the room again.
+  }
+}
