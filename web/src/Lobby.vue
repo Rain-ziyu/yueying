@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from "vue";
+import { ref, onMounted, onUnmounted, watch } from "vue";
 import { ArrowRight, Plus, DoorOpen, Compass, Library, Search } from "@lucide/vue";
 import { api, configureEndpoint, endpoint, type Member } from "./api";
 import { session, accountApi, accountJoin } from "./account";
@@ -65,12 +65,14 @@ async function loadMine() {
     const cards = session.value
       ? await accountApi<Card[]>("account/rooms")
       : [];
+    if (version !== listVersion) return;
     const verified = [] as typeof saved;
     for (let i = 0; i < saved.length; i += 100) {
       const batch = saved.slice(i, i + 100);
       const rows = await api<Card[]>("account/guests", null, {
         tokens: batch.map((g) => g.member.token),
       });
+      if (version !== listVersion) return;
       for (const room of batch) {
         const card = rows.find((v) => v.invite === room.member.invite);
         if (card) verified.push({ ...room, title: card.title });
@@ -84,7 +86,7 @@ async function loadMine() {
       );
     }
   } catch (e) {
-    emit("error", e);
+    if (version === listVersion) emit("error", e);
   } finally {
     if (version === listVersion) busy.value = false;
   }
@@ -116,17 +118,26 @@ watch(session, () => {
 });
 
 const query = ref("");
+const browseError = ref("");
 let browseVersion = 0;
+let directoryRequest: AbortController | undefined;
 watch(query, (_, __, onCleanup) => {
   ++browseVersion;
+  directoryRequest?.abort();
+  browseError.value = "";
   publicRooms.value = [];
   more.value = false;
   busy.value = true;
-  const timer = window.setTimeout(() => browse(), 250);
+  const timer = window.setTimeout(() => { if (tab.value === "browse") browse(); }, 250);
   onCleanup(() => clearTimeout(timer));
 });
 async function browse(append = false) {
   const version = ++browseVersion;
+  directoryRequest?.abort();
+  const request = new AbortController();
+  directoryRequest = request;
+  const timeout = window.setTimeout(() => request.abort(), 20000);
+  browseError.value = "";
   busy.value = true;
   try {
     configureEndpoint(serverUrl.value);
@@ -135,7 +146,7 @@ async function browse(append = false) {
     if (query.value.trim()) params.set("q", query.value.trim());
     if (last) params.set("after", last);
     const res = await api<{ rooms: typeof publicRooms.value; more: boolean }>(
-      "rooms?" + params,
+      "rooms?" + params, null, undefined, request.signal,
     );
     if (version !== browseVersion) return;
     publicRooms.value = append
@@ -143,16 +154,27 @@ async function browse(append = false) {
       : res.rooms;
     more.value = res.more;
   } catch (e) {
-    if (version === browseVersion) emit("error", e);
+    if (version === browseVersion)
+      browseError.value = request.signal.aborted ? "连接超时，请重试" : "无法读取公开房间，请检查网络和服务地址";
   } finally {
+    clearTimeout(timeout);
     if (version === browseVersion) busy.value = false;
   }
 }
 function switchTab(t: typeof tab.value) {
+  ++listVersion;
+  ++browseVersion;
+  directoryRequest?.abort();
+  busy.value = false;
   tab.value = t;
   if (t === "browse") browse();
   if (t === "mine") loadMine();
 }
+onUnmounted(() => {
+  ++listVersion;
+  ++browseVersion;
+  directoryRequest?.abort();
+});
 async function submit() {
   if (busy.value) return;
   busy.value = true;
@@ -192,7 +214,7 @@ async function submit() {
 }
 function pick(code: string) {
   invite.value = code;
-  tab.value = "join";
+  switchTab("join");
   name.value = saved(code)?.member.name || name.value;
 }
 onMounted(() => {
@@ -214,7 +236,7 @@ onMounted(() => {
           v-for="t in tabs"
           :key="t.id"
           :aria-current="t.id === tab ? 'page' : undefined"
-          :disabled="busy"
+          :disabled="busy && (tab === 'create' || tab === 'join')"
           @click="switchTab(t.id)"
         >
           <component :is="t.icon" aria-hidden="true" /> {{ t.label }}
@@ -268,7 +290,11 @@ onMounted(() => {
       </form>
       <template v-else-if="tab === 'browse'"
         ><label class="room-search"><Search aria-hidden="true" /><input v-model="query" type="search" aria-label="查找公开房间" placeholder="输入房间名称或房间码" maxlength="100" /></label>
-        <p role="status" v-if="!publicRooms.length">
+        <div v-if="browseError" role="alert">
+          {{ browseError }}
+          <button type="button" @click="browse(false)">重试</button>
+        </div>
+        <p role="status" v-else-if="!publicRooms.length">
           {{ busy ? "正在加载…" : query.trim() ? "没有匹配的公开房间" : "暂无公开房间" }}
         </p>
         <button
