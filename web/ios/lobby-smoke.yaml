@@ -6,6 +6,6 @@ appId: app.yueying.watch
 - assertVisible: "华为账号.*"
 - tapOn: "账号登录"
 - tapOn: "加入房间"
-- assertVisible: "房间码"
+- assertVisible: ".*房间码.*"
 - tapOn: "我的房间"
 - assertVisible: "暂无房间。"

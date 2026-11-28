@@ -273,6 +273,7 @@ onMounted(() => {
         <label v-else
           >房间码<input
             v-model="invite"
+            aria-label="房间码"
             required
             placeholder="输入朋友分享的房间码"
         /></label>
