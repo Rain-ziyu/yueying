@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from "vue";
-import { ArrowRight } from "@lucide/vue";
+import { ArrowRight, Plus, DoorOpen, Compass, Library, Search } from "@lucide/vue";
 import { api, configureEndpoint, endpoint, type Member } from "./api";
 import { session, accountApi, accountJoin } from "./account";
 import { guestRooms, saved, remember, forget } from "./rooms";
@@ -13,16 +13,41 @@ const tab = ref<"create" | "join" | "browse" | "mine">(
   invite.value ? "join" : "create",
 );
 const tabs = [
-  { id: "create", label: "创建房间" },
-  { id: "join", label: "加入房间" },
-  { id: "browse", label: "公开大厅" },
-  { id: "mine", label: "我的房间" },
+  { id: "create", icon: Plus, label: "创建房间" },
+  { id: "join", icon: DoorOpen, label: "加入房间" },
+  { id: "browse", icon: Compass, label: "公开大厅" },
+  { id: "mine", icon: Library, label: "我的房间" },
 ] as const;
 const name = ref(""),
   title = ref(""),
   listed = ref(false),
   busy = ref(false),
   serverUrl = ref(endpoint);
+const connectionNote = ref("");
+function saveConnection() {
+  try {
+    configureEndpoint(serverUrl.value.trim());
+    serverUrl.value = endpoint;
+    connectionNote.value = "服务地址已保存";
+  } catch (e) {
+    connectionNote.value = e instanceof Error ? e.message : "服务地址无效";
+  }
+}
+const cinematicMotion = window.matchMedia("(hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference)");
+function moveScene(event: PointerEvent) {
+  if (!cinematicMotion.matches || event.pointerType === "touch") return;
+  const poster = event.currentTarget as HTMLElement;
+  const bounds = poster.getBoundingClientRect();
+  const x = (event.clientX - bounds.left) / bounds.width - 0.5;
+  const y = (event.clientY - bounds.top) / bounds.height - 0.5;
+  poster.style.setProperty("--pan-x", (x * 14).toFixed(1) + "px");
+  poster.style.setProperty("--pan-y", (y * 10).toFixed(1) + "px");
+}
+function resetScene(event: PointerEvent) {
+  const poster = event.currentTarget as HTMLElement;
+  poster.style.removeProperty("--pan-x");
+  poster.style.removeProperty("--pan-y");
+}
 const configurable = !import.meta.env.VITE_API_URL;
 const publicRooms = ref<{ title: string; invite: string }[]>([]),
   more = ref(false);
@@ -90,22 +115,37 @@ watch(session, () => {
   if (tab.value === "mine") loadMine();
 });
 
+const query = ref("");
+let browseVersion = 0;
+watch(query, (_, __, onCleanup) => {
+  ++browseVersion;
+  publicRooms.value = [];
+  more.value = false;
+  busy.value = true;
+  const timer = window.setTimeout(() => browse(), 250);
+  onCleanup(() => clearTimeout(timer));
+});
 async function browse(append = false) {
+  const version = ++browseVersion;
   busy.value = true;
   try {
     configureEndpoint(serverUrl.value);
     const last = append ? publicRooms.value.at(-1)?.invite : "";
+    const params = new URLSearchParams();
+    if (query.value.trim()) params.set("q", query.value.trim());
+    if (last) params.set("after", last);
     const res = await api<{ rooms: typeof publicRooms.value; more: boolean }>(
-      "rooms" + (last ? "?after=" + encodeURIComponent(last) : ""),
+      "rooms?" + params,
     );
+    if (version !== browseVersion) return;
     publicRooms.value = append
       ? [...publicRooms.value, ...res.rooms]
       : res.rooms;
     more.value = res.more;
   } catch (e) {
-    emit("error", e);
+    if (version === browseVersion) emit("error", e);
   } finally {
-    busy.value = false;
+    if (version === browseVersion) busy.value = false;
   }
 }
 function switchTab(t: typeof tab.value) {
@@ -161,8 +201,8 @@ onMounted(() => {
 </script>
 <template>
   <section class="lobby shell">
-    <div class="poster">
-      <div class="lunar" aria-hidden="true"></div>
+    <div class="poster" @pointermove="moveScene" @pointerleave="resetScene" @pointercancel="resetScene">
+      <div class="cinema-panorama" aria-hidden="true"></div>
       <div class="poster-caption">
         <h1>一起看部电影<span>。</span></h1>
         <p>与朋友共享画面、进度和实时弹幕。</p>
@@ -177,7 +217,7 @@ onMounted(() => {
           :disabled="busy"
           @click="switchTab(t.id)"
         >
-          {{ t.label }}
+          <component :is="t.icon" aria-hidden="true" /> {{ t.label }}
         </button>
       </nav>
       <div :key="tab" class="lobby-content">
@@ -217,16 +257,19 @@ onMounted(() => {
         <details v-if="configurable">
           <summary>连接设置</summary>
           <label
-            >月映服务地址<input v-model="serverUrl" type="url" required
+            >月映服务地址<input v-model="serverUrl" @input="connectionNote = ''" type="url" required
           /></label>
+          <button type="button" class="save-endpoint" @click="saveConnection">保存服务地址</button>
+          <p v-if="connectionNote" role="status">{{ connectionNote }}</p>
         </details>
         <button class="primary" :disabled="busy">
           {{ tab === "create" ? "创建房间" : "加入房间" }}<ArrowRight />
         </button>
       </form>
       <template v-else-if="tab === 'browse'"
-        ><p v-if="!publicRooms.length">
-          {{ busy ? "正在加载…" : "暂无公开房间" }}
+        ><label class="room-search"><Search aria-hidden="true" /><input v-model="query" type="search" aria-label="查找公开房间" placeholder="输入房间名称或房间码" maxlength="100" /></label>
+        <p role="status" v-if="!publicRooms.length">
+          {{ busy ? "正在加载…" : query.trim() ? "没有匹配的公开房间" : "暂无公开房间" }}
         </p>
         <button
           class="room-row"
@@ -234,7 +277,7 @@ onMounted(() => {
           :key="r.invite"
           @click="pick(r.invite)"
         >
-          {{ r.title }}<span>加入 →</span></button
+          <strong>{{ r.title }}<small>{{ r.invite }}</small></strong><span>加入 →</span></button
         ><button v-if="more" :disabled="busy" @click="browse(true)">
           加载更多
         </button></template

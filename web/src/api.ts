@@ -12,9 +12,10 @@ export function configureEndpoint(value: string) {
     throw Error("服务地址需要 HTTPS，本机开发可用 localhost");
   if (u.username || u.password || u.pathname !== "/" || u.search || u.hash)
     throw Error("请输入服务根地址");
-  if (!import.meta.env.VITE_API_URL) {
+  if (!import.meta.env.VITE_API_URL && endpoint !== u.origin) {
     endpoint = u.origin;
     localStorage.setItem("api-origin", endpoint);
+    window.dispatchEvent(new Event("yueying-service-change"));
   }
 }
 export type Member = {

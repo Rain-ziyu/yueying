@@ -62,6 +62,9 @@ export function readSession(): Login | null {
   }
 }
 export const session = ref<Login | null>(readSession());
+window.addEventListener("yueying-service-change", () => {
+  session.value = readSession();
+});
 window.addEventListener("storage", (e) => {
   if (!e.key || e.key === sessionKey()) session.value = readSession();
 });
@@ -89,16 +92,17 @@ export async function signIn(
   handle: string,
   password: string,
 ) {
-  setSession(
-    await api<Login>(register ? "account/register" : "account/login", null, {
+  const origin = endpoint;
+  const login = await api<Login>(register ? "account/register" : "account/login", null, {
       handle,
       password,
-    }),
-  );
+  });
+  if (origin === endpoint) setSession(login);
 }
 export async function signOut() {
+  const current = readSession();
   await accountApi("account/logout", {});
-  setSession(null);
+  if (readSession()?.token === current?.token) setSession(null);
 }
 export async function accountJoin(invite: string, name?: string) {
   const m = await accountApi<Member>("join", {
