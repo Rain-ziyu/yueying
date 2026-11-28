@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from "vue";
 import ProfileEditor from "./ProfileEditor.vue";
-import { Check, Copy } from "@lucide/vue";
+import { Check, Copy, X } from "@lucide/vue";
 import {
   providerName,
   refreshProfile,
@@ -17,6 +17,11 @@ const open = ref(false),
   handle = ref(""),
   password = ref(""),
   busy = ref(false);
+const trigger = ref<HTMLButtonElement>();
+function closePanel() {
+  open.value = false;
+  trigger.value?.focus();
+}
 const notice = ref<{ kind: "success" | "error" | "pending"; text: string }>();
 type Provider = { id: string; name: string; enabled: boolean };
 const options = ref<Provider[]>([]),
@@ -107,6 +112,7 @@ onMounted(() => {
 <template>
   <div class="account-menu">
     <button
+      ref="trigger"
       class="invite-link account-trigger"
       :aria-expanded="open"
       :disabled="busy"
@@ -124,10 +130,10 @@ onMounted(() => {
       </span>
       <span>{{ session ? session.name : "账号登录" }}</span>
     </button>
-    <section v-if="open" class="account-panel" aria-label="账号">
-      <h3>
+    <section v-if="open" class="account-panel" aria-label="账号" @keydown.esc.stop="closePanel">
+      <div class="account-panel-heading"><h3>
         {{ session ? "个人资料" : register ? "注册月映账号" : "登录月映" }}
-      </h3>
+      </h3><button type="button" aria-label="关闭账号面板" @click="closePanel"><X /></button></div>
       <p
         v-if="notice"
         class="account-notice"

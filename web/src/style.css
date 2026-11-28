@@ -1358,9 +1358,9 @@ progress::-moz-progress-bar {
 @media (max-width: 540px) {
   .account-panel {
     position: fixed;
-    top: 58px;
-    right: 12px;
-    max-height: calc(100dvh - 70px);
+      top: calc(58px + env(safe-area-inset-top, 0px));
+      right: calc(12px + env(safe-area-inset-right, 0px));
+      max-height: calc(100dvh - 70px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
     overflow-y: auto;
   }
 }
@@ -1497,6 +1497,9 @@ body {
 .listing-switch input:checked::after { background: #352743; }
 .account-panel { border-radius: 16px; padding: 20px; }
 .account-panel h3 { margin: 0 0 8px; font-size: 20px; }
+.account-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.account-panel-heading h3 { margin: 0; }
+.account-panel-heading button { margin: 0; min-width: 44px; min-height: 44px; display: grid; place-items: center; }
 .account-panel h4 { color: var(--muted); }
 .account-panel form > label:not(.avatar-picker) { gap: 6px; margin-block: 12px; }
 .account-panel input:not([type=file]) { min-height: 42px; border-radius: 8px; }
