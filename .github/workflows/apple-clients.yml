@@ -50,6 +50,15 @@ jobs:
           node-version: 22
       - run: npm ci
       - run: npm run ios
+      - name: Archive for iPhone and iPad
+        run: |
+          xcodebuild -quiet -workspace ios/App/App.xcworkspace -scheme App -configuration Release -destination 'generic/platform=iOS' -archivePath build/Yueying.xcarchive CODE_SIGNING_ALLOWED=NO archive
+          ditto -c -k --keepParent build/Yueying.xcarchive Yueying-iOS-Device-Unsigned.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Yueying-iOS-Device-Unsigned
+          path: web/Yueying-iOS-Device-Unsigned.zip
+          if-no-files-found: error
       - run: xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
       - name: Launch on an iPhone simulator
         run: |
@@ -60,6 +69,7 @@ jobs:
           xcrun simctl launch "$device" app.yueying.watch
           sleep 5
           xcrun simctl io "$device" screenshot Yueying-iPhone.png
+          echo "SIMULATOR_ID=$device" >> "$GITHUB_ENV"
       - run: ditto -c -k --keepParent build/Build/Products/Release-iphonesimulator/App.app Yueying-iOS-Simulator.zip
       - uses: actions/upload-artifact@v4
         with:
@@ -67,3 +77,7 @@ jobs:
           path: |
             web/Yueying-iOS-Simulator.zip
             web/Yueying-iPhone.png
+      - name: Verify controls on the iPhone
+        run: |
+          brew install mobile-dev-inc/tap/maestro
+          maestro --device "$SIMULATOR_ID" test ios/lobby-smoke.yaml

@@ -1,0 +1,10 @@
+appId: app.yueying.watch
+---
+- launchApp
+- tapOn: "账号登录"
+- assertVisible: "登录月映"
+- tapOn: "账号登录"
+- tapOn: "加入房间"
+- assertVisible: "输入朋友分享的房间码"
+- tapOn: "我的房间"
+- assertVisible: "暂无房间。"
