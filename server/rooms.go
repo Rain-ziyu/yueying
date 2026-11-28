@@ -32,7 +32,12 @@ type roomCard struct {
 }
 
 func (a *app) directory(w http.ResponseWriter, r *http.Request, _ identity) error {
-	rows, e := a.db.Query(r.Context(), "select title,invite from rooms where listed and invite>$1 order by invite limit 51", r.URL.Query().Get("after"))
+	params := r.URL.Query()
+	query := strings.TrimSpace(params.Get("q"))
+	rows, e := a.db.Query(r.Context(), `select title,invite from rooms
+		where listed and invite > $1 and
+		($2::text = '' or strpos(lower(title),lower($2)) > 0 or strpos(lower(invite),lower($2)) > 0)
+		order by invite limit 51`, params.Get("after"), query)
 	if e != nil {
 		return e
 	}
