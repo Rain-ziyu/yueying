@@ -164,7 +164,9 @@ func TestStorageSwitch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			asset := call("uploads", owner, map[string]any{"name": "sample.mp4", "bytes": len(clip)}, 200)["id"].(string)
+			a.qualityWake = make(chan struct{}, 1)
+			call("uploads", peer, map[string]any{"name": "denied.mp4", "bytes": len(clip), "prepareLow": true}, 403)
+			asset := call("uploads", owner, map[string]any{"name": "sample.mp4", "bytes": len(clip), "prepareLow": true}, 200)["id"].(string)
 			base := "uploads/" + asset
 			signed := call(base+"/part", owner, map[string]int{"number": 1}, 200)["url"].(string)
 			req, _ := http.NewRequest("PUT", signed, bytes.NewReader(clip))
@@ -177,7 +179,19 @@ func TestStorageSwitch(t *testing.T) {
 			base = "assets/" + asset
 			call(base+"/low", other, struct{}{}, 404)
 			call(base+"/play?quality=low", peer, nil, 404)
-			call(base+"/low", peer, struct{}{}, 200)
+			select {
+			case <-a.qualityWake:
+			default:
+				t.Fatal("upload completion did not wake encoder")
+			}
+			call("uploads/"+asset+"/complete", owner, struct{}{}, 200)
+			if len(a.qualityWake) > 0 {
+				t.Fatal("duplicate completion woke encoder")
+			}
+			var originalStatus string
+			if err = db.QueryRow(c, "select low_status from assets where id=$1", id).Scan(&originalStatus); err != nil || originalStatus != "" {
+				t.Fatal("unexpected opt-out status", originalStatus, err)
+			}
 			if err = a.drainQuality(c); err != nil {
 				t.Fatal(err)
 			}

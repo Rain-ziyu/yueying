@@ -34,12 +34,16 @@ func (a *app) requestLow(w http.ResponseWriter, r *http.Request, u identity) err
 		status = "queued"
 	}
 	if status == "queued" || status == "processing" {
-		select {
-		case a.qualityWake <- struct{}{}:
-		default:
-		}
+		a.wakeQuality()
 	}
 	return respond(w, map[string]string{"status": status})
+}
+
+func (a *app) wakeQuality() {
+	select {
+	case a.qualityWake <- struct{}{}:
+	default:
+	}
 }
 
 func (a *app) qualityWorker(c context.Context) {

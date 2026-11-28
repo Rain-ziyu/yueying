@@ -15,9 +15,10 @@ func (a *app) begin(w http.ResponseWriter, r *http.Request, u identity) error {
 		return forbidden()
 	}
 	var p struct {
-		Name      string
-		Bytes     int64
-		Protocols []string
+		Name       string
+		Bytes      int64
+		Protocols  []string
+		PrepareLow bool
 	}
 	if e := body(r, &p); e != nil {
 		return e
@@ -47,7 +48,7 @@ func (a *app) begin(w http.ResponseWriter, r *http.Request, u identity) error {
 	if e != nil {
 		return e
 	}
-	_, e = a.db.Exec(c, "insert into assets(id,room,owner_token,name,bytes,store,object_key,upload_id) values($1,$2,$3,$4,$5,$6,$7,$8)", id, u.room, u.token, p.Name, p.Bytes, store, key, upload)
+	_, e = a.db.Exec(c, "insert into assets(id,room,owner_token,name,bytes,store,object_key,upload_id,low_status) values($1,$2,$3,$4,$5,$6,$7,$8,case when $9 then 'on_upload' else '' end)", id, u.room, u.token, p.Name, p.Bytes, store, key, upload, p.PrepareLow)
 	if e != nil {
 		s.abort(c, key, upload)
 		return e
@@ -67,7 +68,7 @@ func (a *app) upload(w http.ResponseWriter, r *http.Request, u identity) error {
 	defer tx.Rollback(c)
 	var store, key, uid string
 	var size int64
-	var ready bool
+	var ready, queueLow bool
 	e = tx.QueryRow(c, "select store,object_key,upload_id,bytes,ready from assets where id=$1 and owner_token=$2 for update", id, u.token).Scan(&store, &key, &uid, &size, &ready)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return fault{404, "上传不存在"}
@@ -130,7 +131,7 @@ func (a *app) upload(w http.ResponseWriter, r *http.Request, u identity) error {
 		}
 		_, e = tx.Exec(c, "insert into locations(asset,store,object_key,bytes) values($1,$2,$3,$4)", id, store, key, size)
 		if e == nil {
-			_, e = tx.Exec(c, "update assets set ready=true where id=$1", id)
+			e = tx.QueryRow(c, "update assets set ready=true, low_status=case when low_status='on_upload' then 'queued' else low_status end where id=$1 returning low_status='queued'", id).Scan(&queueLow)
 		}
 	default:
 		return bad("未知上传操作")
@@ -141,21 +142,24 @@ func (a *app) upload(w http.ResponseWriter, r *http.Request, u identity) error {
 	if e = tx.Commit(c); e != nil {
 		return e
 	}
+	if queueLow {
+		a.wakeQuality()
+	}
 	return respond(w, true)
 }
 func (a *app) list(w http.ResponseWriter, r *http.Request, u identity) error {
-	rows, e := a.db.Query(r.Context(), "select a.id,a.name,coalesce(t.status,''),coalesce(t.detail,'') from assets a left join transcodes t on t.asset=a.id where a.room=$1 and ready and a.original_id is null order by a.name,a.id", u.room)
+	rows, e := a.db.Query(r.Context(), "select a.id,a.name,coalesce(t.status,''),coalesce(t.detail,''),a.low_status from assets a left join transcodes t on t.asset=a.id where a.room=$1 and ready and a.original_id is null order by a.name,a.id", u.room)
 	if e != nil {
 		return e
 	}
 	defer rows.Close()
 	out := []map[string]string{}
 	for rows.Next() {
-		var id, n, status, detail string
-		if e = rows.Scan(&id, &n, &status, &detail); e != nil {
+		var id, n, status, detail, low string
+		if e = rows.Scan(&id, &n, &status, &detail, &low); e != nil {
 			return e
 		}
-		out = append(out, map[string]string{"id": id, "name": n, "transcode": status, "detail": detail})
+		out = append(out, map[string]string{"id": id, "name": n, "transcode": status, "detail": detail, "lowStatus": low})
 	}
 	if e = rows.Err(); e != nil {
 		return e

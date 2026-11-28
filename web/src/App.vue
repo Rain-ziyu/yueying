@@ -58,7 +58,7 @@ const copyNotice = ref(""),
 let copyTimer = 0,
   copyRequest = 0;
 const assets = ref<
-    { id: string; name: string; transcode: string; detail: string }[]
+    { id: string; name: string; lowStatus?: string; transcode: string; detail: string }[]
   >([]),
   video = ref<HTMLVideoElement>(),
   stage = ref<HTMLElement>(),
@@ -79,6 +79,28 @@ type Transfer = {
 };
 const transfer = ref<Transfer | null>(null);
 const busy = ref(false);
+const prepareLow = ref(false);
+const lowLabels: Record<string, string> = {
+  queued: "省流版排队中",
+  processing: "正在生成省流版",
+  ready: "360p 省流版已就绪",
+  already_small: "当前版本已更省流",
+  failed: "省流版生成失败",
+};
+watch(
+  () => assets.value.some(a => a.lowStatus === "queued" || a.lowStatus === "processing"),
+  (pending, _, cleanup) => {
+    if (!pending) return;
+    let loading = false;
+    const timer = window.setInterval(async () => {
+      if (loading) return;
+      loading = true;
+      try { await refresh(); } catch { /* Retry on the next poll. */ }
+      finally { loading = false; }
+    }, 8000);
+    cleanup(() => clearInterval(timer));
+  },
+);
 const percent = computed(() => {
   const t = transfer.value;
   return t?.size ? Math.floor((100 * t.sent) / t.size) : 0;
@@ -810,11 +832,13 @@ async function runUpload(file = pendingFile) {
           current.bytesPerSecond = Math.round(transferred / seconds);
       },
       controller.signal,
+      prepareLow.value,
     );
     if (controller.signal.aborted) return;
     current.sent = file.size;
     pendingFile = undefined;
     current.phase = "上传完成";
+    prepareLow.value = false;
     await refresh().catch(fail);
     if (controller.signal.aborted) return;
     if (can("select")) control({ asset: id, position: 0, playing: false });
@@ -846,6 +870,7 @@ function chat() {
   }
 }
 function leave() {
+  prepareLow.value = false;
   clearQuality();
   pendingFile = undefined;
   uploadController?.abort();
@@ -1259,6 +1284,10 @@ onUnmounted(() => {
         <div class="library-head">
           <h2>房间片源</h2>
         </div>
+        <label v-if="can('upload')" class="prepare-low">
+          <input type="checkbox" v-model="prepareLow" :disabled="busy" />
+          上传后提前生成 360p 省流版
+        </label>
         <label class="pick" :class="{ busy }"
           ><input
             type="file"
@@ -1338,7 +1367,7 @@ onUnmounted(() => {
               ><strong>{{ a.name }}</strong
               ><small>{{
                 state.asset === a.id ? "当前片源" : "选择播放"
-              }}</small></span
+              }}</small><small v-if="a.lowStatus">{{ lowLabels[a.lowStatus] }}</small></span
             ><Check v-if="state.asset === a.id" class="check" />
           </button>
           <button

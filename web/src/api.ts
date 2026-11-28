@@ -112,6 +112,7 @@ export async function upload(
   member: Member,
   progress: (phase: UploadPhase, bytes: number, transferred?: number) => void,
   signal: AbortSignal,
+  prepareLow = false,
 ) {
   const key = [
     "upload",
@@ -130,6 +131,7 @@ export async function upload(
         {
           name: file.name,
           bytes: file.size,
+          prepareLow,
           protocols: ["s3-multipart-v1", "kodo-multipart-v2"],
         },
         signal,
