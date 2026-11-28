@@ -17,7 +17,7 @@ import {
   Send,
   Upload as UploadIcon,
 } from "@lucide/vue";
-import { api, endpoint, upload, type Member, type UploadPhase } from "./api";
+import { api, endpoint, constrainedNetwork, upload, type Member, type UploadPhase } from "./api";
 import AccountMenu from "./AccountMenu.vue";
 import { session, accountApi, accountJoin } from "./account";
 import { forget } from "./rooms";
@@ -67,7 +67,7 @@ type Transfer = {
   size: number;
   sent: number;
   bytesPerSecond?: number;
-  phase: UploadPhase | "上传完成" | "上传失败";
+  phase: UploadPhase | "已暂停" | "上传完成" | "上传失败";
   error?: string;
 };
 const transfer = ref<Transfer | null>(null);
@@ -76,6 +76,7 @@ const percent = computed(() => {
   const t = transfer.value;
   return t?.size ? Math.floor((100 * t.sent) / t.size) : 0;
 });
+let pendingFile: File | undefined;
 let uploadController: AbortController | undefined;
 function sizeLabel(bytes: number) {
   if (bytes < 1024) return bytes + " B";
@@ -177,6 +178,7 @@ function memberProgress(person: Participant) {
   );
 }
 const pendingToggle = ref<boolean | null>(null);
+const slowCommand = ref(false);
 const togglePauses = computed(
   () =>
     !blocked.value && (state.value.playing || pendingNames.value.length > 0),
@@ -191,6 +193,7 @@ const canToggle = computed(
 );
 const toggleLabel = computed(() => {
   if (!connected.value) return "正在重连，暂时无法控制播放";
+  if (slowCommand.value) return pendingToggle.value ? "播放请求已发送，等待服务器确认" : "暂停请求已发送，等待服务器确认";
   if (pendingToggle.value !== null)
     return pendingToggle.value ? "正在请求播放…" : "正在请求暂停…";
   if (!canToggle.value)
@@ -212,6 +215,7 @@ const feedback = computed(() => {
 function resetCommand() {
   clearTimeout(commandTimer);
   pendingToggle.value = null;
+  slowCommand.value = false;
 }
 let opening = "",
   needsSeek = false,
@@ -225,6 +229,21 @@ function bufferAhead(v: HTMLVideoElement, at: number) {
       return v.buffered.end(i) - at;
   }
   return 0;
+}
+let gateStarted = 0;
+let lastStall = -Infinity;
+function onWaiting() {
+  const v = video.value;
+  if (v && state.value.playing && !v.seeking && v.currentTime > 0 && bufferAhead(v, v.currentTime) < 1)
+    lastStall = performance.now();
+  beginBuffering();
+  reportPlayback();
+}
+function needsExtraBuffer() {
+  return constrainedNetwork() || performance.now() - lastStall < 60000;
+}
+function bufferGoal(v: HTMLVideoElement) {
+  return Math.min((needsExtraBuffer() ? 15 : 6) * state.value.rate, Math.max(0, v.duration - v.currentTime));
 }
 function measureBuffer() {
   const v = video.value;
@@ -255,8 +274,8 @@ function measureBuffer() {
     Math.abs(v.currentTime - Math.min(state.value.position, v.duration)) <
       0.25 &&
     (ahead.value + 0.1 >=
-      Math.min(6 * state.value.rate, v.duration - v.currentTime) ||
-      (v.readyState === 4 && ahead.value >= 1))
+      bufferGoal(v) ||
+      (performance.now() - gateStarted >= 8000 && v.readyState >= 3 && ahead.value >= 1))
   ) {
     if (socket?.readyState === WebSocket.OPEN) {
       readyVersion = state.value.version;
@@ -414,11 +433,12 @@ function connect() {
     }
     if (m.type === "access" && info.value) {
       info.value.self = m.self;
-      if (!can("upload")) uploadController?.abort();
+      if (!can("upload")) pauseUpload();
     }
     if (m.type === "settings") reloadInfo().catch(fail);
     if (m.type === "presence") members.value = m.members;
     if (m.type === "bufferWait" && m.version === state.value.version) {
+      if (!pendingNames.value.length) gateStarted = performance.now();
       pendingNames.value = m.names;
       measureBuffer();
     }
@@ -584,11 +604,10 @@ async function align() {
   if (waiting.value || v.paused || v.readyState < 3) {
     beginBuffering();
     // A browser can cap preloading while paused. Allow native playback to take over.
-    const goal = Math.min(6 * s.rate, Math.max(0, v.duration - v.currentTime));
+    const goal = bufferGoal(v);
     if (
       ahead.value + 0.1 < goal &&
-      !(v.readyState === 4 && ahead.value >= 1) &&
-      now - bufferingSince < 6000
+      now - bufferingSince < (needsExtraBuffer() ? 10000 : 6000)
     ) {
       if (!v.paused) v.pause();
       return;
@@ -680,18 +699,28 @@ function toggle() {
   }
   pendingToggle.value = !state.value.playing;
   commandTimer = window.setTimeout(() => {
-    resetCommand();
-    status.value = "尚未收到房间确认";
+    slowCommand.value = true;
+    commandTimer = window.setTimeout(() => socket?.close(), 20000);
   }, 10000);
   control({
     playing: !state.value.playing,
     position: video.value?.ended ? 0 : (video.value?.currentTime ?? target()),
   });
 }
-async function select(e: Event) {
+function select(e: Event) {
   const input = e.target as HTMLInputElement,
     file = input.files?.[0];
-  if (!file || !member.value || busy.value) return;
+  input.value = "";
+  if (file) void runUpload(file);
+}
+function pauseUpload() {
+  if (!uploadController || !transfer.value) return;
+  transfer.value.phase = "已暂停";
+  uploadController.abort();
+}
+async function runUpload(file = pendingFile) {
+  if (!file || !member.value || busy.value || !can("upload")) return;
+  pendingFile = file;
   const controller = new AbortController();
   busy.value = true;
   uploadController = controller;
@@ -709,6 +738,7 @@ async function select(e: Event) {
       file,
       member.value,
       (phase, bytes, transferred) => {
+        if (controller.signal.aborted) return;
         current.phase = phase;
         current.sent = bytes;
         const seconds = (performance.now() - startedAt) / 1000;
@@ -719,6 +749,7 @@ async function select(e: Event) {
     );
     if (controller.signal.aborted) return;
     current.sent = file.size;
+    pendingFile = undefined;
     current.phase = "上传完成";
     await refresh().catch(fail);
     if (controller.signal.aborted) return;
@@ -733,7 +764,6 @@ async function select(e: Event) {
       uploadController = undefined;
       busy.value = false;
     }
-    input.value = "";
   }
 }
 async function transcode(id: string) {
@@ -752,6 +782,7 @@ function chat() {
   }
 }
 function leave() {
+  pendingFile = undefined;
   uploadController?.abort();
   uploadController = undefined;
   busy.value = false;
@@ -953,10 +984,7 @@ onUnmounted(() => {
               "
               @pause="reportPlayback"
               @seeked="reportPlayback"
-              @waiting="
-                beginBuffering();
-                reportPlayback();
-              "
+              @waiting="onWaiting"
               @progress="measureBuffer"
               @canplay="align().catch(fail)"
               @loadedmetadata="
@@ -1191,6 +1219,9 @@ onUnmounted(() => {
               · 平均 {{ sizeLabel(transfer.bytesPerSecond) }}/s
             </span></small
           >
+          <button v-if="transfer.phase === '正在上传'" class="invite-link" @click="pauseUpload">暂停上传</button>
+          <button v-if="transfer.phase === '已暂停' || transfer.phase === '上传失败'" class="invite-link" :disabled="busy || !can('upload')" @click="runUpload()">继续上传</button>
+          <small v-if="transfer.phase === '已暂停'">继续时会复用已完成的分片。</small>
           <p v-if="transfer.error" role="alert">{{ transfer.error }}</p>
         </div>
         <div class="list-heading">

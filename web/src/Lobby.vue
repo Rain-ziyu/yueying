@@ -180,6 +180,7 @@ onMounted(() => {
           {{ t.label }}
         </button>
       </nav>
+      <div :key="tab" class="lobby-content">
       <h2>{{ tabs.find((t) => t.id === tab)?.label }}</h2>
       <form
         v-if="tab === 'create' || tab === 'join'"
@@ -263,6 +264,7 @@ onMounted(() => {
           </button>
         </div>
       </template>
+      </div>
     </div>
   </section>
 </template>

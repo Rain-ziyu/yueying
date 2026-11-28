@@ -24,6 +24,13 @@ export type Member = {
   room: string;
   name: string;
 };
+class HttpError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
+export function constrainedNetwork() {
+  const link = (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string; downlink?: number } }).connection;
+  return !!link && (!!link.saveData || ["slow-2g", "2g", "3g"].includes(link.effectiveType ?? "") || (link.downlink ?? Infinity) < 2);
+}
 export async function api<T>(
   path: string,
   member?: Pick<Member, "token"> | null,
@@ -39,7 +46,7 @@ export async function api<T>(
     body: data === undefined ? undefined : JSON.stringify(data),
     signal,
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new HttpError(res.status, await res.text());
   return res.json();
 }
 type Upload = {
@@ -67,20 +74,35 @@ function putPart(
     signal.throwIfAborted();
     const request = new XMLHttpRequest();
     const abort = () => request.abort();
-    request.upload.onprogress = (event) =>
+    let stalled = false;
+    let idleTimer: number;
+    const watchProgress = () => {
+      clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(() => {
+        stalled = true;
+        request.abort();
+      }, 90000);
+    };
+    request.upload.onprogress = (event) => {
+      watchProgress();
       report(Math.min(event.loaded, chunk.size));
+    };
     request.open("PUT", url);
     for (const [name, value] of Object.entries(headers ?? {}))
       request.setRequestHeader(name, value);
     const failed = () =>
-      reject(new Error("分片上传失败，请重新选择同一文件续传"));
+      reject(new HttpError(request.status, "分片上传失败，可继续上传"));
     request.onload = () =>
       request.status >= 200 && request.status < 300 ? resolve() : failed();
     request.onerror = request.ontimeout = failed;
     request.onabort = () =>
-      reject(new DOMException("上传已中止", "AbortError"));
-    request.onloadend = () => signal.removeEventListener("abort", abort);
+      stalled ? failed() : reject(new DOMException("上传已中止", "AbortError"));
+    request.onloadend = () => {
+      clearTimeout(idleTimer);
+      signal.removeEventListener("abort", abort);
+    };
     signal.addEventListener("abort", abort, { once: true });
+    watchProgress();
     request.send(chunk);
   });
 }
@@ -139,7 +161,7 @@ export async function upload(
   function report(number: number, bytes: number, resumed = false) {
     const delta = bytes - sent[number - 1];
     total += delta;
-    if (!resumed) transferred += delta;
+    if (!resumed) transferred += Math.max(0, delta);
     sent[number - 1] = bytes;
     progress("正在上传", total, transferred);
   }
@@ -149,7 +171,7 @@ export async function upload(
   signal.throwIfAborted();
   signal.addEventListener("abort", stop, { once: true });
   let next = 1;
-  async function send(number: number, chunk: Blob) {
+  async function sendOnce(number: number, chunk: Blob) {
     const { url, headers } = await api<{
       url: string;
       headers?: Record<string, string>;
@@ -157,6 +179,30 @@ export async function upload(
     await putPart(url, headers, chunk, batch.signal, (bytes) =>
       report(number, bytes),
     );
+  }
+  async function send(number: number, chunk: Blob) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await sendOnce(number, chunk);
+        return;
+      } catch (err) {
+        batch.signal.throwIfAborted();
+        const transient = err instanceof TypeError || (err instanceof HttpError &&
+          (err.status === 0 || err.status === 408 || err.status === 429 || err.status >= 500));
+        if (!transient || attempt >= 3) throw err;
+        report(number, 0);
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            clearTimeout(timer);
+            batch.signal.removeEventListener("abort", done);
+            resolve();
+          };
+          const timer = setTimeout(done, 750 * 2 ** attempt);
+          batch.signal.addEventListener("abort", done, {once:true});
+        });
+        batch.signal.throwIfAborted();
+      }
+    }
   }
   async function worker() {
     while (next <= count) {
@@ -185,7 +231,8 @@ export async function upload(
       report(number, chunk.size);
     }
   }
-  const workers = Array.from({ length: Math.min(3, count) }, worker);
+  progress("正在上传", 0, 0);
+  const workers = Array.from({ length: Math.min(constrainedNetwork() ? 1 : 3, count) }, worker);
   try {
     await Promise.all(workers);
   } catch (err) {

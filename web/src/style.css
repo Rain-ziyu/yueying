@@ -215,9 +215,16 @@ p {
   margin-top: 8px;
 }
 .entry {
-  align-self: start;
+  display: flex;
+  flex-direction: column;
+  height: clamp(510px, 69vh, 650px);
   min-width: 0;
   padding: clamp(24px, 4vw, 52px);
+}
+.lobby-content {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  min-height: 0;
 }
 .entry h2,
 .room-head h1 {
@@ -999,7 +1006,7 @@ progress::-moz-progress-bar {
   accent-color: var(--green);
   margin: 0;
 }
-.entry > p,
+.lobby-content > p,
 .management small {
   color: var(--muted);
   font-size: 14px;
