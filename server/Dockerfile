@@ -10,5 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certi
 WORKDIR /app
 COPY --from=build /yueying .
 ENV NATIVE_CLIENT_ORIGINS=http://tauri.localhost,tauri://localhost,https://localhost,capacitor://localhost,https://yueying.localhost
+COPY --chmod=755 native-origin-migration.sh /app/native-origin-migration.sh
 USER nobody
+ENTRYPOINT ["/app/native-origin-migration.sh"]
 CMD ["./yueying"]
