@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -151,6 +153,53 @@ func TestStorageSwitch(t *testing.T) {
 	}
 	put(id, "first")
 	put(id2, "second")
+	if bin, err := exec.LookPath("ffmpeg"); err == nil {
+		t.Run("personal quality", func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "source.mp4")
+			cmd := exec.Command(bin, "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=s=960x540:r=24", "-t", "3", "-c:v", "libx264", "-crf", "10", "-pix_fmt", "yuv420p", path)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("fixture %s: %v", output, err)
+			}
+			clip, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			asset := call("uploads", owner, map[string]any{"name": "sample.mp4", "bytes": len(clip)}, 200)["id"].(string)
+			base := "uploads/" + asset
+			signed := call(base+"/part", owner, map[string]int{"number": 1}, 200)["url"].(string)
+			req, _ := http.NewRequest("PUT", signed, bytes.NewReader(clip))
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			call(base+"/complete", owner, struct{}{}, 200)
+			base = "assets/" + asset
+			call(base+"/low", other, struct{}{}, 404)
+			call(base+"/play?quality=low", peer, nil, 404)
+			call(base+"/low", peer, struct{}{}, 200)
+			if err = a.drainQuality(c); err != nil {
+				t.Fatal(err)
+			}
+			if status := call(base+"/low", owner, struct{}{}, 200)["status"]; status != "ready" {
+				t.Fatal(status)
+			}
+			low := call(base+"/play?quality=low", peer, nil, 200)["url"].(string)
+			res, err := http.Get(low)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer res.Body.Close()
+			if res.StatusCode != 200 || res.ContentLength <= 0 || res.ContentLength >= int64(len(clip)) {
+				t.Fatal("low bytes", res.StatusCode, res.ContentLength)
+			}
+			if u := call(base+"/play", owner, nil, 200)["url"]; u == low {
+				t.Fatal("default quality changed")
+			}
+			call(base+"/play?quality=low", other, nil, 404)
+			t.Logf("original %d bytes, low %d bytes", len(clip), res.ContentLength)
+		})
+	}
 	play := "assets/" + id + "/play"
 	old := call(play, peer, nil, 200)["url"].(string)
 	call(play, other, nil, 404)

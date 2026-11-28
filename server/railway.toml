@@ -1,6 +1,5 @@
 [build]
-builder = "RAILPACK"
-buildCommand = "go build -trimpath -o yueying ."
+builder = "DOCKERFILE"
 
 [deploy]
 startCommand = "./yueying"

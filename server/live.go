@@ -272,7 +272,7 @@ func (a *app) control(c context.Context, lr *liveRoom, room string, p *peer, s s
 	if e != nil {
 		return
 	}
-	res, e := a.db.Exec(c, "update rooms set state=$1 where id=$2 and (state->>'version')::bigint=$3 and exists(select 1 from assets where id=$4 and assets.room=$2 and ready)", raw, room, prior, s.Asset)
+	res, e := a.db.Exec(c, "update rooms set state=$1 where id=$2 and (state->>'version')::bigint=$3 and exists(select 1 from assets where id=$4 and assets.room=$2 and ready and original_id is null)", raw, room, prior, s.Asset)
 	if e != nil || res.RowsAffected() != 1 {
 		p.send(map[string]string{"type": "error", "message": "房间状态已变化，请重试"})
 		return

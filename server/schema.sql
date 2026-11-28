@@ -57,3 +57,7 @@ CREATE TABLE IF NOT EXISTS media_deletions (
  store text NOT NULL, object_key text NOT NULL, upload_id text NOT NULL DEFAULT '', next_try timestamptz NOT NULL DEFAULT now(),
  PRIMARY KEY(store,object_key,upload_id)
 );
+
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS low_status text NOT NULL DEFAULT '';
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS low_id text REFERENCES assets(id);
+CREATE INDEX IF NOT EXISTS assets_low_pending ON assets(id) WHERE low_status IN ('queued','processing');

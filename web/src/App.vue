@@ -464,6 +464,7 @@ function connect() {
       resetCommand();
       const next: State = m.state;
       const prev = state.value;
+      if (prev.asset !== next.asset) clearQuality();
       const priorPosition =
         prev.position +
         (prev.playing
@@ -518,17 +519,65 @@ function target() {
       : 0)
   );
 }
-async function source(id: string) {
-  if (opening === id) return;
+type Quality = "default" | "low";
+const quality = ref<Quality>("default");
+const qualityNote = ref("");
+let qualityTimer = 0, qualityRequest = 0;
+function clearQuality() {
+  clearTimeout(qualityTimer);
+  qualityRequest++;
+  quality.value = "default";
+  qualityNote.value = "";
+}
+async function setQuality(value: Quality) {
+  clearQuality();
+  const generation = qualityRequest;
+  const id = state.value.asset;
+  quality.value = value;
+  if (!id) return;
+  if (value === "default") {
+    await source(id).catch(fail);
+    return;
+  }
+  let firstCheck = true;
+  async function check() {
+    try {
+      const result = await api<{status:string}>("assets/" + id + (firstCheck ? "/low?retry=1" : "/low"), member.value, {});
+      firstCheck = false;
+      if (generation !== qualityRequest || state.value.asset !== id) return;
+      if (result.status === "ready") {
+        await source(id, "low");
+        if (generation === qualityRequest) qualityNote.value = "";
+      } else if (result.status === "queued" || result.status === "processing") {
+        qualityNote.value = "正在准备省流版，完成后本机自动切换";
+        qualityTimer = window.setTimeout(check, 5000);
+      } else {
+        clearQuality();
+        qualityNote.value = result.status === "already_small" ? "当前版本已更省流，继续播放" : "省流版生成失败，继续播放当前版本";
+      }
+    } catch (err) {
+      if (generation !== qualityRequest) return;
+      clearQuality();
+      fail(err);
+    }
+  }
+  qualityNote.value = "正在检查省流版";
+  await check();
+}
+let activeQuality: Quality = "default";
+async function source(id: string, mode: Quality = "default", force = false) {
+  const key = id + ":" + mode;
+  if (opening === key || (!force && loaded === id && activeQuality === mode && !opening)) return;
   const nonce = ++request;
-  opening = id;
+  opening = key;
   try {
     const result = await api<{ url: string; ttl: number }>(
-      "assets/" + id + "/play",
+      "assets/" + id + "/play" + (mode === "low" ? "?quality=low" : ""),
       member.value,
     );
     if (nonce !== request || id !== state.value.asset || !video.value) return;
     loaded = id;
+    activeQuality = mode;
     expiresAt = Date.now() + result.ttl * 1000;
     needsSeek = true;
     ahead.value = position.value = duration.value = 0;
@@ -547,7 +596,10 @@ function mediaError() {
     loaded === state.value.asset &&
     Date.now() >= expiresAt - 60000
   ) {
-    source(loaded).catch(fail);
+    source(loaded, activeQuality, true).catch(fail);
+  } else if (activeQuality === "low" && state.value.asset === loaded) {
+    void setQuality("default");
+    qualityNote.value = "省流版加载失败，正在恢复默认画质";
   } else {
     msg.value = "无法播放此片源，请检查格式或网络";
   }
@@ -782,6 +834,7 @@ function chat() {
   }
 }
 function leave() {
+  clearQuality();
   pendingFile = undefined;
   uploadController?.abort();
   uploadController = undefined;
@@ -1101,6 +1154,10 @@ onUnmounted(() => {
               <small v-if="state.asset" class="buffer-info"
                 >已缓冲 {{ Math.floor(ahead) }} 秒</small
               >
+              <select v-if="state.asset" aria-label="本机画质" title="只调整本机画质" :value="quality" @change="setQuality(($event.target as HTMLSelectElement).value as Quality)">
+                <option value="default">默认画质</option>
+                <option value="low">省流 · 360p</option>
+              </select>
               <select
                 aria-label="倍速"
                 :disabled="!can('rate')"
@@ -1125,6 +1182,7 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+        <p v-if="qualityNote" role="status">{{ qualityNote }}</p>
         <form class="chat" @submit.prevent="chat">
           <label for="danmaku"><MessageSquare />弹幕</label
           ><input

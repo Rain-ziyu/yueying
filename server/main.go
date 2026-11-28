@@ -24,6 +24,7 @@ import (
 var schema string
 
 type app struct {
+	qualityWake       chan struct{}
 	db                *pgxpool.Pool
 	stores            map[string]storage
 	primary, fallback string
@@ -145,6 +146,7 @@ func (a *app) routes() http.Handler {
 	r.Post("/api/v1/join", a.wrap(false, a.join))
 	r.Post("/api/v1/uploads", a.wrap(true, a.begin))
 	r.Post("/api/v1/uploads/{id}/{op}", a.wrap(true, a.upload))
+	r.Post("/api/v1/assets/{id}/low", a.wrap(true, a.requestLow))
 	r.Post("/api/v1/assets/{id}/transcode", a.wrap(true, a.queueTranscode))
 	r.Get("/api/v1/assets", a.wrap(true, a.list))
 	r.Get("/api/v1/assets/{id}/play", a.wrap(true, a.play))
@@ -300,6 +302,9 @@ func main() {
 		}
 		return
 	}
+	a.qualityWake = make(chan struct{}, 1)
+	go a.qualityWorker(c)
+	a.qualityWake <- struct{}{}
 	go a.maintain(c)
 	port := os.Getenv("PORT")
 	if port == "" {

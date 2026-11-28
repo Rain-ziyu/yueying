@@ -164,7 +164,7 @@ func (a *app) list(w http.ResponseWriter, r *http.Request, u identity) error {
 }
 func (a *app) play(w http.ResponseWriter, r *http.Request, u identity) error {
 	var store, key string
-	e := a.db.QueryRow(r.Context(), "select f.store,f.object_key from assets a join assets f on f.id=coalesce(a.playable_id,a.id) where a.room=$1 and a.id=$2 and a.ready and f.ready", u.room, chi.URLParam(r, "id")).Scan(&store, &key)
+	e := a.db.QueryRow(r.Context(), "select f.store,f.object_key from assets a join assets f on f.id=case when $3='low' then a.low_id else coalesce(a.playable_id,a.id) end and f.room=a.room where a.room=$1 and a.id=$2 and a.ready and f.ready", u.room, chi.URLParam(r, "id"), r.URL.Query().Get("quality")).Scan(&store, &key)
 	if e != nil {
 		return fault{404, "片源不可用"}
 	}
