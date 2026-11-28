@@ -18,6 +18,7 @@ import {
   Upload as UploadIcon,
 } from "@lucide/vue";
 import { api, endpoint, constrainedNetwork, upload, type Member, type UploadPhase } from "./api";
+import { useRoomVoice } from "./voice";
 import AccountMenu from "./AccountMenu.vue";
 import { session, accountApi, accountJoin } from "./account";
 import { forget } from "./rooms";
@@ -45,6 +46,12 @@ const manage = ref(false),
 const can = (ability: Ability) =>
   !!info.value &&
   (info.value.self.role !== "member" || !!info.value.self.permissions[ability]);
+const voiceAvailable = ref(false);
+const { mic, speaker, needsGesture, hint, pending, toggleMic, toggleSpeaker, resumeAudio, receive, disconnectVoice, resetVoice } =
+  useRoomVoice((frame) => {
+    if (socket?.readyState === WebSocket.OPEN && socket.bufferedAmount < 8192)
+      socket.send(JSON.stringify({ type: "voice", text: frame }));
+  }, computed(() => voiceAvailable.value && can("chat")));
 const copyNotice = ref(""),
   manualCopy = ref(""),
   copyFailure = ref(false);
@@ -392,6 +399,7 @@ function connect() {
     ws.send(
       JSON.stringify({
         token: member.value?.token,
+        voice: typeof AudioContext !== "undefined",
         presence: true,
         bufferSync: true,
       }),
@@ -400,6 +408,8 @@ function connect() {
   ws.onmessage = async (event) => {
     if (socket !== ws) return;
     const m = JSON.parse(event.data);
+    if (m.type === "voiceAvailable") voiceAvailable.value = true;
+    if (m.type === "voice") { receive(m.from, m.text); return; }
     if (
       m.type === "pong" &&
       pingAt &&
@@ -498,6 +508,8 @@ function connect() {
     clearTimeout(clockTimer);
     clearTimeout(watchdog);
     if (socket !== ws) return;
+    voiceAvailable.value = false;
+    disconnectVoice();
     connected.value = false;
     pendingNames.value = [];
     members.value = [];
@@ -864,6 +876,8 @@ function leave() {
   waiting.value = blocked.value = showPlay.value = false;
   opening = "";
   playAttempt = undefined;
+  voiceAvailable.value = false;
+  resetVoice();
   const old = socket;
   socket = undefined;
   old?.close();
@@ -961,6 +975,16 @@ onUnmounted(() => {
       <span class="connection" :class="{ online: connected }"
         ><i></i>{{ connected ? "已连接" : "连接中…" }}</span
       >
+      <div v-if="voiceAvailable" class="invite-tools" aria-label="房间语音">
+        <button class="invite-link" :aria-pressed="mic" :disabled="!can('chat')" @click="toggleMic">
+          {{ !can('chat') ? '已禁言' : pending ? '取消开启麦克风' : mic ? '关闭麦克风' : '开启麦克风' }}
+        </button>
+        <button class="invite-link" :aria-pressed="speaker" @click="toggleSpeaker">
+          {{ speaker ? '关闭语音扬声器' : '开启语音扬声器' }}
+        </button>
+        <button v-if="needsGesture && (speaker || mic)" class="invite-link" @click="resumeAudio">启用设备音频</button>
+        <small v-if="hint" role="status">{{ hint }}</small>
+      </div>
       <div class="invite-tools">
         <button
           v-if="session && !member.accountId"

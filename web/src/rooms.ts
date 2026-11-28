@@ -5,7 +5,7 @@ export const labels = {
   pause: "暂停",
   forward: "前进",
   back: "后退",
-  chat: "发送弹幕",
+  chat: "发送弹幕和语音",
   upload: "上传片源",
   select: "切换片源",
   rate: "调整倍速",
