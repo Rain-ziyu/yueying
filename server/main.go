@@ -271,6 +271,14 @@ func (a *app) migrate(c context.Context, id, target string) error {
 }
 func main() {
 	c := context.Background()
+	if len(os.Args) == 3 && os.Args[1] == "sync-client-origins" {
+		ctx, cancel := context.WithTimeout(c, 30*time.Second)
+		defer cancel()
+		if err := syncClientOrigins(ctx, os.Args[2]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	db, e := pgxpool.New(c, os.Getenv("DATABASE_URL"))
 	if e != nil {
 		log.Fatal(e)
