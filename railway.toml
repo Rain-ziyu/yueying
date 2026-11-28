@@ -1,2 +1,0 @@
-[deploy]
-preDeployCommand = ["./yueying sync-client-origins https://rain-ziyu.github.io"]
