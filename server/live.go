@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"math"
 	"net/http"
@@ -44,6 +45,7 @@ type peer struct {
 	member     participant
 	subscribed bool
 	credential string
+	voice      bool
 	bufferSync bool
 }
 
@@ -116,6 +118,7 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 	ws.SetReadDeadline(time.Now().Add(8 * time.Second))
 	var auth struct {
 		Token      string
+		Voice      bool
 		Presence   bool
 		BufferSync bool
 	}
@@ -129,7 +132,7 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	room := u.room
-	p := &peer{bufferSync: auth.BufferSync, subscribed: auth.Presence, credential: credential, ws: ws, out: make(chan any, 32), done: make(chan struct{})}
+	p := &peer{voice: auth.Voice, bufferSync: auth.BufferSync, subscribed: auth.Presence, credential: credential, ws: ws, out: make(chan any, 32), done: make(chan struct{})}
 	defer close(p.done)
 	go p.writeLoop()
 	a.mu.Lock()
@@ -152,6 +155,9 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 		p.send(map[string]any{"type": "state", "state": lr.state, "now": time.Now().UnixMilli()})
 		if p.subscribed {
 			p.send(map[string]any{"type": "access", "self": u.access})
+		}
+		if p.voice {
+			p.send(map[string]any{"type": "voiceAvailable"})
 		}
 		lr.presence()
 		if lr.pending != nil && p.bufferSync {
@@ -184,7 +190,7 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 	}
 	lastCheck := time.Now()
 	var lastProbe int64
-	var lastSample time.Time
+	var lastSample, nextVoice time.Time
 	for {
 		var m struct {
 			Type, Text, Action string
@@ -234,6 +240,26 @@ func (a *app) live(w http.ResponseWriter, r *http.Request) {
 					lr.presence()
 				} else {
 					p.send(map[string]any{"type": "presence", "members": lr.roster()})
+				}
+			}
+		case "voice":
+			// One mono PCM16 frame is 1024 samples at 16 kHz (64 ms).
+			now := time.Now()
+			if !p.voice || !p.member.allows("chat") || len(m.Text) != base64.StdEncoding.EncodedLen(2048) || nextVoice.After(now.Add(192*time.Millisecond)) {
+				break
+			}
+			frame, err := base64.StdEncoding.DecodeString(m.Text)
+			if err != nil || len(frame) != 2048 {
+				break
+			}
+			if nextVoice.Before(now) {
+				nextVoice = now
+			}
+			nextVoice = nextVoice.Add(64 * time.Millisecond)
+			packet := map[string]string{"type": "voice", "from": p.member.ID, "text": m.Text}
+			for listener := range lr.clients {
+				if listener != p && listener.voice && len(listener.out) < cap(listener.out)/2 {
+					listener.send(packet)
 				}
 			}
 		case "chat":
